@@ -4,11 +4,53 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# Typed schemas
+# ---------------------------------------------------------------------------
+class JobPostSignal(TypedDict):
+    open_roles: int
+    velocity: str          # "high" | "moderate" | "low"
+    focus: str
+    source: str            # URL that was scraped (or "synthetic")
+    confidence: str        # "high" | "medium" | "low"
+    raw_titles: List[str]
+
+
+class LeadershipSignal(TypedDict):
+    event: Optional[str]
+    date: Optional[str]
+    headline: Optional[str]
+    source: str
+    confidence: str
+
+
+class FundingSignal(TypedDict):
+    stage: Optional[str]
+    last_funding_months: Optional[int]
+    confidence: str
+
+
+class LayoffSignal(TypedDict):
+    event: Optional[str]
+    date: Optional[str]
+    headcount: int
+    percentage: float
+    confidence: str
+
+
+class AiMaturitySignal(TypedDict):
+    score: int             # 0-3
+    confidence: str
+    signal_summary: List[str]
+    details: Dict[str, Any]
+
 
 
 @dataclass
@@ -212,35 +254,46 @@ class EnrichmentPipeline:
             "confidence": "low"
         }
 
-    def lookup_job_post_velocity(self, company_name: str) -> Dict:
-        """Analyze job posting velocity."""
-        # In a real implementation, this would scrape job boards
-        # For now, generate realistic synthetic data
-        count = random.randint(0, 15)
-        velocity = "high" if count >= 8 else "moderate" if count >= 3 else "low"
+    def lookup_job_post_velocity(self, company_name: str, domain: str | None = None) -> JobPostSignal:
+        """Scrape publicly accessible page for open role counts (Playwright, no-login)."""
+        try:
+            from agent.scraper import SignalScraper
+            scraper = SignalScraper()
+            result = scraper.run(scraper.scrape_job_postings(company_name, domain))
+            return result  # type: ignore[return-value]
+        except Exception as e:
+            # Graceful fallback if Playwright is not installed or scraping fails
+            import logging
+            logging.getLogger(__name__).warning(f"Playwright scrape failed for {company_name}: {e}. Falling back to synthetic.")
+            count = random.randint(0, 15)
+            velocity = "high" if count >= 8 else "moderate" if count >= 3 else "low"
+            return {
+                "open_roles": count,
+                "velocity": velocity,
+                "focus": "engineering (synthetic)",
+                "source": "synthetic",
+                "confidence": "low",   # Explicitly mark synthetic as low-confidence
+                "raw_titles": [],
+            }
 
-        focus_areas = [
-            "Python engineering", "data platform", "ML infrastructure", "full-stack product",
-            "backend development", "frontend development", "DevOps", "AI/ML engineering"
-        ]
-        focus = random.choice(focus_areas)
-
-        return {
-            "open_roles": count,
-            "velocity": velocity,
-            "focus": focus,
-            "confidence": "high" if count >= 8 else "medium" if count >= 3 else "low",
-        }
-
-    def lookup_leadership_change(self, company_name: str) -> Dict:
-        """Check for recent leadership changes."""
-        # In a real implementation, this would check press releases and Crunchbase
-        changed = random.random() < 0.25
-        return {
-            "event": "new CTO/VP Engineering" if changed else None,
-            "date": date.today().isoformat() if changed else None,
-            "confidence": "medium" if changed else "low",
-        }
+    def lookup_leadership_change(self, company_name: str, domain: str | None = None) -> LeadershipSignal:
+        """Scrape public news for recent CTO/VP Eng announcements (Playwright, no-login)."""
+        try:
+            from agent.scraper import SignalScraper
+            scraper = SignalScraper()
+            result = scraper.run(scraper.scrape_leadership_changes(company_name, domain))
+            return result  # type: ignore[return-value]
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Leadership scrape failed for {company_name}: {e}. Falling back to synthetic.")
+            changed = random.random() < 0.25
+            return {
+                "event": "new CTO/VP Engineering" if changed else None,
+                "date": date.today().isoformat() if changed else None,
+                "headline": None,
+                "source": "synthetic",
+                "confidence": "low",  # Explicitly mark synthetic as low-confidence
+            }
 
     def score_ai_maturity(self, signals: Dict) -> Dict:
         """Score AI maturity based on signals."""

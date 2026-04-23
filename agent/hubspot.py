@@ -38,7 +38,15 @@ class HubSpotClient:
                     ]
                 }
             ],
-            "properties": ["email", "firstname", "lastname", "phone", "company", "website", "outreach_status"],
+            "properties": [
+                "email", "firstname", "lastname", "phone", "company", "website",
+                # Enrichment schema fields
+                "outreach_status",
+                "icp_segment",
+                "enrichment_signals",
+                "enrichment_timestamp",
+                "last_booked_call_at",
+            ],
             "limit": 1,
         }
         response = requests.post(url, json=payload, headers=self.headers, timeout=10)
@@ -80,6 +88,40 @@ class HubSpotClient:
                 **properties,
             )
         return self.create_contact(email, firstname, lastname, **properties)
+
+    def upsert_enriched_contact(
+        self,
+        email: str,
+        firstname: str | None = None,
+        lastname: str | None = None,
+        icp_segment: str | None = None,
+        enrichment_signals: str | None = None,   # JSON string — see docs/hubspot_schema.md
+        enrichment_timestamp: str | None = None, # ISO-8601 UTC
+        **extra_properties,
+    ) -> dict:
+        """
+        Upsert a contact and write the canonical enrichment schema fields.
+
+        All five enrichment-schema properties are described in docs/hubspot_schema.md.
+        Custom properties must be created in HubSpot before they can be written.
+
+        Property reference:
+            outreach_status      (string) cold | warm | engaged | sms_confirmed | opted_out
+            icp_segment          (string) segment_1_series_a_b | segment_2_... | unknown
+            enrichment_signals   (string) JSON blob (see hubspot_schema.md)
+            enrichment_timestamp (datetime) ISO-8601 UTC
+            last_booked_call_at  (datetime) ISO-8601 UTC
+        """
+        import datetime
+        ts = enrichment_timestamp or datetime.datetime.utcnow().isoformat() + "Z"
+        props = {k: v for k, v in {
+            "icp_segment": icp_segment,
+            "enrichment_signals": enrichment_signals,
+            "enrichment_timestamp": ts,
+            **extra_properties,
+        }.items() if v is not None}
+
+        return self.upsert_contact_by_email(email, firstname, lastname, **props)
 
     def log_note(self, contact_id: str, message: str) -> dict:
         url = f"{HUBSPOT_URL}/crm/v3/objects/notes"

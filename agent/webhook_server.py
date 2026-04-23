@@ -1,8 +1,9 @@
-import json
+import os
 import logging
 from flask import Flask, request, jsonify
 from agent.events import events
 from agent.hubspot import HubSpotClient
+import agent.sms_router  # registers @events.on("sms_reply") handlers
 
 app = Flask(__name__)
 hubspot = HubSpotClient()
