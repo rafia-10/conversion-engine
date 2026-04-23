@@ -1,6 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from agent.hubspot import HubSpotClient
 
 load_dotenv()
 
@@ -17,11 +18,51 @@ class AfricaTalkingClient:
         )
         self.sender = os.getenv("AFRICASTALK_SENDER", "Tenacious")
         self.timeout = int(os.getenv("AFRICASTALK_TIMEOUT_SECONDS", "10"))
+        self.hubspot = HubSpotClient()
 
         if not self.api_key:
             raise ValueError("Missing AFRICASTALK_API_KEY in environment")
 
-    def send_sms(self, to: str, message: str) -> dict:
+    def is_warm_lead(self, to: str) -> bool:
+        """
+        Check if the lead is 'warm' (has replied to an email).
+        Since we only have the phone number 'to', we might need to search HubSpot by phone.
+        """
+        # Africa's Talking 'to' is usually a phone number
+        url = f"{os.getenv('HUBSPOT_BASE_URL', 'https://api.hubapi.com')}/crm/v3/objects/contacts/search"
+        payload = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {
+                            "propertyName": "phone",
+                            "operator": "EQ",
+                            "value": to,
+                        }
+                    ]
+                }
+            ],
+            "properties": ["outreach_status"],
+            "limit": 1,
+        }
+        response = requests.post(url, json=payload, headers=self.hubspot.headers, timeout=10)
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            if results:
+                status = results[0].get("properties", {}).get("outreach_status")
+                # According to warm.md: once a prospect replies, thread moves to 'warm'
+                # We expect outreach_status to be 'warm' or similar if they replied.
+                return status in ["warm", "engaged", "curious"]
+        return False
+
+    def send_sms(self, to: str, message: str, bypass_gate: bool = False) -> dict:
+        if not bypass_gate and not self.is_warm_lead(to):
+            return {
+                "status": "gate_blocked",
+                "provider": "africas_talking",
+                "error": "SMS blocked: lead is not warm (no prior email engagement)",
+            }
+
         payload = {
             "username": self.username,
             "to": to,

@@ -38,7 +38,7 @@ class HubSpotClient:
                     ]
                 }
             ],
-            "properties": ["email", "firstname", "lastname", "phone", "company", "website"],
+            "properties": ["email", "firstname", "lastname", "phone", "company", "website", "outreach_status"],
             "limit": 1,
         }
         response = requests.post(url, json=payload, headers=self.headers, timeout=10)
