@@ -1,6 +1,24 @@
-# Requirements for the main project
+# Core project dependencies
+fastapi>=0.100.0
+uvicorn>=0.22.0
+httpx>=0.24.0
+requests>=2.28.0
+python-dotenv>=1.0.0
 
-flask==2.1.1
-werkzeug<3.0.0
-requests==2.28.1
-python-dotenv
+# LLM client
+openai>=1.0.0
+
+# Observability
+langfuse>=2.0.0
+
+# Data processing
+pandas>=1.5.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Web scraping
+playwright>=1.40.0
+beautifulsoup4>=4.11.0
+
+# Utilities
+pyngrok>=5.0.0
