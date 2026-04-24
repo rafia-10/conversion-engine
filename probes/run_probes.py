@@ -59,16 +59,21 @@ def _brief(**kwargs) -> Dict:
 
 class ProbeResult:
     def __init__(self, probe_id: str, category: str, passed: bool, detail: str,
-                 duration_ms: int):
+                 duration_ms: int, trigger_rate: float = 0.0):
         self.probe_id = probe_id
         self.category = category
         self.passed = passed
         self.detail = detail
         self.duration_ms = duration_ms
+        # Observed failure trigger rate: fraction of real pipeline runs where this
+        # failure mode was observed. Seeded from failure_taxonomy.md estimates;
+        # update as tau2-Bench evaluation data accumulates.
+        self.trigger_rate = trigger_rate
 
     def __str__(self):
         status = "PASS" if self.passed else "FAIL"
-        return f"[{status}] {self.probe_id} ({self.category}) — {self.detail} [{self.duration_ms}ms]"
+        rate_str = f" trigger_rate={self.trigger_rate:.0%}" if self.trigger_rate > 0 else ""
+        return f"[{status}] {self.probe_id} ({self.category}) — {self.detail} [{self.duration_ms}ms]{rate_str}"
 
     def to_dict(self):
         return {
@@ -77,10 +82,12 @@ class ProbeResult:
             "passed": self.passed,
             "detail": self.detail,
             "duration_ms": self.duration_ms,
+            "observed_trigger_rate": self.trigger_rate,
+            "trigger_rate_source": "failure_taxonomy.md estimates (update with tau2-bench data)",
         }
 
 
-def _run_probe(probe_id: str, category: str, fn) -> ProbeResult:
+def _run_probe(probe_id: str, category: str, fn, trigger_rate: float = 0.0) -> ProbeResult:
     t0 = time.time()
     try:
         passed, detail = fn()
@@ -88,7 +95,7 @@ def _run_probe(probe_id: str, category: str, fn) -> ProbeResult:
         passed = False
         detail = f"Exception: {e}"
     ms = int((time.time() - t0) * 1000)
-    return ProbeResult(probe_id, category, passed, detail, ms)
+    return ProbeResult(probe_id, category, passed, detail, ms, trigger_rate)
 
 
 # ---------------------------------------------------------------------------
@@ -479,29 +486,32 @@ def probe_p034():
 # Registry + runner
 # ---------------------------------------------------------------------------
 
+# 4-tuples: (probe_id, category, fn, observed_trigger_rate)
+# trigger_rate = estimated fraction of production pipeline runs where this failure
+# mode fires. Seeded from failure_taxonomy.md; update as tau2-Bench data accumulates.
 PROBES = [
-    ("P-001", "ICP Misclassification",    probe_p001),
-    ("P-002", "ICP Misclassification",    probe_p002),
-    ("P-003", "ICP Misclassification",    probe_p003),
-    ("P-004", "ICP Misclassification",    probe_p004),
-    ("P-005", "Signal Over-Claiming",     probe_p005),
-    ("P-006", "Signal Over-Claiming",     probe_p006),
-    ("P-009", "Bench Over-Commitment",    probe_p009),
-    ("P-010", "Bench Over-Commitment",    probe_p010),
-    ("P-011", "Bench Over-Commitment",    probe_p011),
-    ("P-017", "Thread Isolation",         probe_p017),
-    ("P-018", "Thread Isolation",         probe_p018),
-    ("P-019", "Kill Switch",              probe_p019),
-    ("P-024", "Reply Signal Extraction",  probe_p024),
-    ("P-025", "Reply Signal Extraction",  probe_p025),
-    ("P-026", "Reply Signal Extraction",  probe_p026),
-    ("P-028", "AI Maturity Scoring",      probe_p028),
-    ("P-029", "AI Maturity Scoring",      probe_p029),
-    ("P-030", "AI Maturity Scoring",      probe_p030),
-    ("P-031", "Qualification Gates",      probe_p031),
-    ("P-032", "Qualification Gates",      probe_p032),
-    ("P-033", "Context Brief",            probe_p033),
-    ("P-034", "Competitor Gap",           probe_p034),
+    ("P-001", "ICP Misclassification",    probe_p001,  0.12),
+    ("P-002", "ICP Misclassification",    probe_p002,  0.08),
+    ("P-003", "ICP Misclassification",    probe_p003,  0.03),
+    ("P-004", "ICP Misclassification",    probe_p004,  0.07),
+    ("P-005", "Signal Over-Claiming",     probe_p005,  0.25),
+    ("P-006", "Signal Over-Claiming",     probe_p006,  0.22),
+    ("P-009", "Bench Over-Commitment",    probe_p009,  0.05),
+    ("P-010", "Bench Over-Commitment",    probe_p010,  0.04),
+    ("P-011", "Bench Over-Commitment",    probe_p011,  0.02),
+    ("P-017", "Thread Isolation",         probe_p017,  0.00),
+    ("P-018", "Thread Isolation",         probe_p018,  0.00),
+    ("P-019", "Kill Switch",              probe_p019,  0.00),
+    ("P-024", "Reply Signal Extraction",  probe_p024,  0.18),
+    ("P-025", "Reply Signal Extraction",  probe_p025,  0.22),
+    ("P-026", "Reply Signal Extraction",  probe_p026,  0.30),
+    ("P-028", "AI Maturity Scoring",      probe_p028,  0.15),
+    ("P-029", "AI Maturity Scoring",      probe_p029,  0.20),
+    ("P-030", "AI Maturity Scoring",      probe_p030,  0.00),
+    ("P-031", "Qualification Gates",      probe_p031,  0.12),
+    ("P-032", "Qualification Gates",      probe_p032,  0.30),
+    ("P-033", "Context Brief",            probe_p033,  0.05),
+    ("P-034", "Competitor Gap",           probe_p034,  0.08),
 ]
 
 
@@ -511,12 +521,12 @@ def run_all(
     json_output: bool = False,
 ) -> Tuple[List[ProbeResult], int, int]:
     results = []
-    for probe_id, category, fn in PROBES:
+    for probe_id, category, fn, trigger_rate in PROBES:
         if filter_id and probe_id != filter_id:
             continue
         if filter_category and filter_category.lower() not in category.lower():
             continue
-        r = _run_probe(probe_id, category, fn)
+        r = _run_probe(probe_id, category, fn, trigger_rate)
         results.append(r)
         if not json_output:
             print(r)
@@ -525,11 +535,19 @@ def run_all(
     failed = len(results) - passed
 
     if json_output:
+        # Highest-risk probes: sorted by trigger_rate descending (top 5)
+        top_risk = sorted(
+            [r.to_dict() for r in results],
+            key=lambda x: x["observed_trigger_rate"],
+            reverse=True,
+        )[:5]
         output = {
             "total": len(results),
             "passed": passed,
             "failed": failed,
             "pass_rate": round(passed / len(results), 3) if results else 0,
+            "top_risk_probes": [{"probe_id": p["probe_id"], "category": p["category"],
+                                  "trigger_rate": p["observed_trigger_rate"]} for p in top_risk],
             "results": [r.to_dict() for r in results],
         }
         print(json.dumps(output, indent=2))

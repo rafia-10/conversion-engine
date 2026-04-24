@@ -87,6 +87,37 @@ class AiMaturitySignal(TypedDict):
     details: Dict[str, Any]
 
 
+class CompetitorPeerSignal(TypedDict):
+    """One comparable peer, fully scored with the same 6-indicator AI maturity model."""
+    name: str
+    ai_maturity_score: int          # 0-3, same weighted model as prospect
+    ai_maturity_confidence: str     # "high" | "medium" | "low"
+    ai_roles_fraction: float        # fraction of engineering roles that are AI/ML-adjacent
+    evidence: List[str]             # public-signal evidence list from signal_summary
+    github_url: Optional[str]       # public GitHub org URL if present in record
+    exec_commentary: Optional[str]  # verbatim exec public AI commentary excerpt, if any
+
+
+class CompetitorGapBrief(TypedDict):
+    """
+    Structured competitor gap output.
+
+    Primary comparison axis: ai_maturity_score (integer 0-3, same 6-weight model applied
+    to every peer).  The ai_roles_fraction is retained as a secondary evidence field.
+
+    company_percentile is computed by AI maturity SCORE rank vs all peers + prospect.
+    """
+    top_gap: Dict[str, str]              # {"practice": str, "why": str}
+    peers: List[CompetitorPeerSignal]    # comparable peers, each fully scored
+    company_ai_maturity_score: int       # prospect's own score (0-3)
+    company_ai_fraction: float           # prospect's AI role fraction
+    company_percentile: Optional[int]    # 0-100 rank by AI maturity score vs peers
+    peer_ai_fractions: List[float]       # sorted peer fractions (reference only)
+    peer_ai_scores: List[int]            # sorted peer AI maturity scores
+    top_quartile_peers: List[str]        # names of peers in top quartile by score
+    confidence: str                      # "high" (>=3 peers) | "medium" (1-2) | "low" (0)
+
+
 @dataclass
 class EnrichmentSignal:
     value: Any
@@ -564,6 +595,10 @@ class EnrichmentPipeline:
         company_headcount = crunchbase_record.get("headcount", 50)
         company_ai_frac = float(crunchbase_record.get("ai_roles_fraction", 0) or 0)
 
+        # Score the prospect with the same 6-indicator model
+        company_maturity = _score_ai_maturity_from_record(crunchbase_record)
+        company_score = company_maturity["score"]
+
         # Find peers: same industry, similar headcount band, from Crunchbase sample
         headcount_lo = max(0, company_headcount * 0.5)
         headcount_hi = company_headcount * 2.0
@@ -600,29 +635,52 @@ class EnrichmentPipeline:
                     "practice": "Building a clear AI ownership model between product and delivery.",
                     "why": "Top-quartile peers in this sector publicly signal stronger AI alignment.",
                 },
+                "peers": [],
+                "company_ai_maturity_score": company_score,
+                "company_ai_fraction": company_ai_frac,
                 "peer_ai_fractions": [],
+                "peer_ai_scores": [],
+                "top_quartile_peers": [],
                 "company_percentile": None,
                 "confidence": "low",
             }
 
-        peer_fracs = sorted([float(p.get("ai_roles_fraction", 0) or 0) for p in peers])
-        all_fracs = sorted(peer_fracs + [company_ai_frac])
-        rank = all_fracs.index(company_ai_frac)
-        percentile = round(rank / max(len(all_fracs) - 1, 1) * 100)
+        # Score each peer with the same 6-indicator model
+        scored_peers: List[CompetitorPeerSignal] = []
+        for p in peers:
+            peer_maturity = _score_ai_maturity_from_record(p)
+            scored_peers.append({
+                "name": p.get("name", "unknown"),
+                "ai_maturity_score": peer_maturity["score"],
+                "ai_maturity_confidence": peer_maturity["confidence"],
+                "ai_roles_fraction": float(p.get("ai_roles_fraction", 0) or 0),
+                "evidence": peer_maturity["signal_summary"],
+                "github_url": p.get("github_url") or None,
+                "exec_commentary": p.get("exec_commentary") or None,
+            })
 
-        top_quartile_threshold = (
-            all_fracs[int(len(all_fracs) * 0.75)] if len(all_fracs) >= 4 else all_fracs[-1]
-        )
+        # Percentile by AI maturity SCORE rank (primary axis per spec)
+        peer_scores = [p["ai_maturity_score"] for p in scored_peers]
+        all_scores = sorted(peer_scores + [company_score])
+        rank = sum(1 for s in all_scores if s < company_score)
+        company_percentile = round(rank / max(len(all_scores) - 1, 1) * 100)
+
+        peer_ai_fractions = sorted(p["ai_roles_fraction"] for p in scored_peers)
+        sorted_peer_scores = sorted(peer_scores)
+
+        # Top-quartile threshold by score
+        scored_sorted = sorted(scored_peers, key=lambda x: x["ai_maturity_score"])
+        tq_idx = max(0, int(len(scored_sorted) * 0.75) - 1)
+        tq_threshold_score = scored_sorted[tq_idx]["ai_maturity_score"] if scored_sorted else 3
         top_quartile_peers = [
-            p.get("name", "?") for p in peers
-            if float(p.get("ai_roles_fraction", 0) or 0) >= top_quartile_threshold
+            p["name"] for p in scored_peers
+            if p["ai_maturity_score"] >= tq_threshold_score
         ]
 
-        if company_ai_frac < top_quartile_threshold:
+        if company_score < tq_threshold_score:
             gap_practice = (
-                f"Top-quartile {industry} peers allocate "
-                f"{top_quartile_threshold:.0%}+ of engineering to AI/ML roles; "
-                f"{company_name} is at {company_ai_frac:.0%}."
+                f"Top-quartile {industry} peers score {tq_threshold_score}/3 on AI maturity; "
+                f"{company_name} scores {company_score}/3."
             )
             gap_why = (
                 f"Companies like {', '.join(top_quartile_peers[:2] or ['sector leaders'])} "
@@ -630,7 +688,7 @@ class EnrichmentPipeline:
                 f"without proportionally expanding headcount."
             )
         else:
-            gap_practice = "AI team composition is in the top quartile for this sector."
+            gap_practice = "AI maturity score is in the top quartile for this sector."
             gap_why = "No material capability gap identified vs. comparable peers."
 
         return {
@@ -638,11 +696,14 @@ class EnrichmentPipeline:
                 "practice": gap_practice,
                 "why": gap_why,
             },
-            "peer_ai_fractions": peer_fracs,
+            "peers": scored_peers,
+            "company_ai_maturity_score": company_score,
             "company_ai_fraction": company_ai_frac,
-            "company_percentile": percentile,
+            "company_percentile": company_percentile,
+            "peer_ai_fractions": peer_ai_fractions,
+            "peer_ai_scores": sorted_peer_scores,
             "top_quartile_peers": top_quartile_peers[:3],
-            "confidence": "high" if len(peers) >= 3 else "medium",
+            "confidence": "high" if len(scored_peers) >= 3 else ("medium" if len(scored_peers) >= 1 else "low"),
         }
 
     # -----------------------------------------------------------------------
