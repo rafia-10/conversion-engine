@@ -1,6 +1,11 @@
 import os
+import sys
 import logging
 from flask import Flask, request, jsonify
+
+# Add the project root to sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from agent.events import events
 from agent.hubspot import HubSpotClient
 import agent.sms_router  # registers @events.on("sms_reply") handlers
@@ -10,8 +15,12 @@ hubspot = HubSpotClient()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@app.route("/")
+def health_check():
+    return "Conversion Engine Webhook Server is Live\n", 200
 
-@app.route("/webhooks/resend", methods=["POST"])
+
+@app.route("/webhooks/resend", methods=["POST"], strict_slashes=False)
 def resend_webhook():
     """
     Handle Resend webhooks for replies and bounces.
@@ -49,7 +58,7 @@ def resend_webhook():
     return jsonify({"status": "ok"}), 200
 
 
-@app.route("/webhooks/africastalking", methods=["POST"])
+@app.route("/webhooks/africastalking", methods=["POST"], strict_slashes=False)
 def africastalking_webhook():
     """
     Handle Africa's Talking inbound SMS webhooks.

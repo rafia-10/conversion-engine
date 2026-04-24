@@ -11,8 +11,9 @@ class ResendEmailClient:
     def __init__(self):
         self.api_key = os.getenv("RESEND_API_KEY")
         self.from_email = os.getenv(
-            "RESEND_FROM_EMAIL", "Tenacious Team <noreply@tenacious.consulting>"
+            "RESEND_FROM_EMAIL", "Rafia <onboarding@resend.dev>"
         )
+        self.reply_to = os.getenv("RESEND_REPLY_TO")  # e.g. rafia@10academy.org
         self.timeout = int(os.getenv("RESEND_TIMEOUT_SECONDS", "10"))
 
         if not self.api_key:
@@ -25,6 +26,8 @@ class ResendEmailClient:
             "subject": subject,
             "html": html,
         }
+        if self.reply_to:
+            payload["reply_to"] = self.reply_to
         if text:
             payload["text"] = text
 
