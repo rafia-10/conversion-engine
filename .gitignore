@@ -2,5 +2,17 @@
 .venv/
 __pycache__/
 *.pyc
-.venv/
-__pycache__/
+
+# Runtime outputs (may contain personal data)
+outputs/sandbox_sink.jsonl
+outputs/threads/
+outputs/*/
+
+# Eval sealed partition — DO NOT COMMIT until Act IV
+eval/held_out/
+
+# Data files (downloaded separately)
+data/
+
+# Playwright browsers
+playwright/.local-browsers/

@@ -1,24 +1,54 @@
+"""
+enrichment.py — Parallel signal enrichment pipeline.
+
+Five modules run concurrently via asyncio.gather():
+  1. crunchbase_lookup   — funding stage, headcount, HQ timezone
+  2. layoffs_lookup      — recent layoff events from layoffs.fyi sample
+  3. job_velocity        — Playwright scrape (falls back to Crunchbase open_roles)
+  4. leadership_change   — Playwright scrape (falls back to synthetic)
+  5. ai_maturity_score   — Weighted scoring per spec: 6 indicators → integer 0-3
+
+AI maturity weights (from spec):
+  ai_adjacent_roles_fraction  0.35
+  named_ai_ml_leadership      0.30
+  github_signal               0.15
+  exec_commentary             0.10
+  modern_ml_stack             0.05
+  strategic_comms             0.05
+
+Score bands: raw < 0.25 → 0, < 0.50 → 1, < 0.75 → 2, else → 3
+"""
+import asyncio
+import csv
 import json
+import logging
 import os
 import random
 import re
-from dataclasses import dataclass
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
+_EXECUTOR = ThreadPoolExecutor(max_workers=5)
 
 # ---------------------------------------------------------------------------
 # Typed schemas
 # ---------------------------------------------------------------------------
+
 class JobPostSignal(TypedDict):
     open_roles: int
     velocity: str          # "high" | "moderate" | "low"
     focus: str
-    source: str            # URL that was scraped (or "synthetic")
+    source: str
     confidence: str        # "high" | "medium" | "low"
     raw_titles: List[str]
 
@@ -35,6 +65,7 @@ class FundingSignal(TypedDict):
     stage: Optional[str]
     last_funding_months: Optional[int]
     confidence: str
+    hq_timezone: Optional[str]
 
 
 class LayoffSignal(TypedDict):
@@ -52,7 +83,6 @@ class AiMaturitySignal(TypedDict):
     details: Dict[str, Any]
 
 
-
 @dataclass
 class EnrichmentSignal:
     value: Any
@@ -60,442 +90,609 @@ class EnrichmentSignal:
     justification: str
 
 
+# ---------------------------------------------------------------------------
+# AI maturity weights (spec-exact)
+# ---------------------------------------------------------------------------
+
+_AI_WEIGHTS = {
+    "ai_adjacent_roles_fraction": 0.35,
+    "named_ai_ml_leadership":     0.30,
+    "github_signal":              0.15,
+    "exec_commentary":            0.10,
+    "modern_ml_stack":            0.05,
+    "strategic_comms":            0.05,
+}
+
+_MODERN_ML_STACK = {
+    "pytorch", "tensorflow", "jax", "hugging face", "huggingface", "langchain",
+    "langgraph", "llm", "mlflow", "weights & biases", "wandb", "triton",
+    "pinecone", "weaviate", "openai api", "rag", "lora", "qlora", "mlops",
+    "databricks ml", "sagemaker", "vertex ai",
+}
+
+
+def _score_ai_maturity_from_record(record: Dict) -> AiMaturitySignal:
+    """Score AI maturity from a Crunchbase-style record using spec weights."""
+    indicators: Dict[str, float] = {}
+    evidence: List[str] = []
+
+    # 1. AI-adjacent roles as fraction of total
+    frac = float(record.get("ai_roles_fraction", 0) or 0)
+    if frac >= 0.30:
+        indicators["ai_adjacent_roles_fraction"] = 1.0
+        evidence.append(f"{frac:.0%} of roles are AI/ML-adjacent")
+    elif frac >= 0.15:
+        indicators["ai_adjacent_roles_fraction"] = 0.5
+        evidence.append(f"{frac:.0%} AI/ML-adjacent roles (moderate)")
+    else:
+        indicators["ai_adjacent_roles_fraction"] = 0.0
+
+    # 2. Named AI/ML leadership
+    if record.get("named_ai_ml_leadership"):
+        title = record.get("ai_ml_leadership_title", "AI/ML leader")
+        indicators["named_ai_ml_leadership"] = 1.0
+        evidence.append(f"Named {title}")
+    else:
+        indicators["named_ai_ml_leadership"] = 0.0
+
+    # 3. GitHub signal
+    if record.get("github_url"):
+        indicators["github_signal"] = 1.0
+        evidence.append("Public GitHub org visible")
+    else:
+        indicators["github_signal"] = 0.0
+
+    # 4. Exec commentary
+    commentary = record.get("exec_commentary") or ""
+    if commentary.strip():
+        indicators["exec_commentary"] = 1.0
+        evidence.append("Exec public AI commentary detected")
+    else:
+        indicators["exec_commentary"] = 0.0
+
+    # 5. Modern ML stack
+    stack = [s.lower() for s in (record.get("ml_stack") or [])]
+    stack_text = " ".join(stack)
+    modern_matches = [k for k in _MODERN_ML_STACK if k in stack_text]
+    if len(modern_matches) >= 3:
+        indicators["modern_ml_stack"] = 1.0
+        evidence.append(f"Modern ML stack: {', '.join(modern_matches[:3])}")
+    elif len(modern_matches) >= 1:
+        indicators["modern_ml_stack"] = 0.5
+        evidence.append(f"Some ML stack signal: {', '.join(modern_matches[:2])}")
+    else:
+        indicators["modern_ml_stack"] = 0.0
+
+    # 6. Strategic comms
+    comms = record.get("strategic_comms") or ""
+    ai_comms_re = re.compile(r'\b(ai|ml|machine.?learning|data.?driven|intelligent|agentic|llm)\b', re.I)
+    if comms and ai_comms_re.search(comms):
+        indicators["strategic_comms"] = 1.0
+        evidence.append(f"Strategic comms: '{comms[:60]}'")
+    else:
+        indicators["strategic_comms"] = 0.0
+
+    raw = sum(_AI_WEIGHTS[k] * indicators.get(k, 0.0) for k in _AI_WEIGHTS)
+
+    if raw < 0.25:
+        score = 0
+    elif raw < 0.50:
+        score = 1
+    elif raw < 0.75:
+        score = 2
+    else:
+        score = 3
+
+    confidence = "high" if score >= 2 and len(evidence) >= 3 else ("medium" if score >= 1 else "low")
+
+    return {
+        "score": score,
+        "confidence": confidence,
+        "signal_summary": evidence or ["no AI maturity signal detected"],
+        "details": {
+            "raw_weighted_score": round(raw, 4),
+            "indicators": indicators,
+            "weights": _AI_WEIGHTS,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# EnrichmentPipeline
+# ---------------------------------------------------------------------------
+
 class EnrichmentPipeline:
     def __init__(self):
-        # Load seed materials
         self.bench_summary = self._load_bench_summary()
-        self.icp_definition = self._load_icp_definition()
-        self.baseline_numbers = self._load_baseline_numbers()
 
-        # Data source paths (may not exist yet)
-        self.crunchbase_path = os.getenv("CRUNCHBASE_SAMPLE_PATH", "./data/crunchbase_sample.json")
-        self.layoffs_path = os.getenv("LAYOFFS_DATA_PATH", "./data/layoffs.fyi.csv")
-        self.job_posts_path = os.getenv("JOB_POSTS_DATA_PATH", "./data/job_posts.json")
+        cb_path = os.getenv("CRUNCHBASE_SAMPLE_PATH", "./data/crunchbase_sample.json")
+        lo_path = os.getenv("LAYOFFS_DATA_PATH", "./data/layoffs_sample.csv")
 
-        # Load available data
-        self.crunchbase_data = self._load_json_file(self.crunchbase_path)
-        self.layoffs_data = self._load_layoffs_data()
-        self.job_posts_data = self._load_json_file(self.job_posts_path)
+        self._crunchbase_index = self._load_crunchbase(cb_path)
+        self._layoffs_index = self._load_layoffs(lo_path)
+
+    # -----------------------------------------------------------------------
+    # Data loaders
+    # -----------------------------------------------------------------------
 
     def _load_bench_summary(self) -> Dict:
-        """Load bench summary from seed materials."""
-        paths = [
-            "./seed/bench_summary.json",
-            "./tenacious_sales_data/seed/bench_summary.json"
-        ]
-        for path in paths:
-            if os.path.exists(path):
+        for p in ["./tenacious_sales_data/seed/bench_summary.json", "./seed/bench_summary.json"]:
+            if os.path.exists(p):
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
+                    with open(p, encoding="utf-8") as f:
                         return json.load(f)
                 except Exception:
-                    continue
+                    pass
         return {}
 
-    def _load_icp_definition(self) -> Dict:
-        """Load ICP definition from seed materials."""
-        paths = [
-            "./seed/icp_definition.md",
-            "./tenacious_sales_data/seed/icp_definition.md"
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        # Parse markdown into structured data
-                        return self._parse_icp_markdown(content)
-                except Exception:
-                    continue
-        return {}
+    def _load_crunchbase(self, path: str) -> Dict[str, Dict]:
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            index = {}
+            for rec in data.get("companies", []):
+                key = rec["name"].lower().strip()
+                index[key] = rec
+                # Also index by domain
+                domain = (rec.get("domain") or "").lower().split(".")[0]
+                if domain:
+                    index[domain] = rec
+            logger.info(f"Loaded {len(data.get('companies', []))} Crunchbase records")
+            return index
+        except Exception as e:
+            logger.warning(f"Failed to load Crunchbase data: {e}")
+            return {}
 
-    def _load_baseline_numbers(self) -> Dict:
-        """Load baseline numbers from seed materials."""
-        paths = [
-            "./seed/baseline_numbers.md",
-            "./tenacious_sales_data/seed/baseline_numbers.md"
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        # Parse markdown into structured data
-                        return self._parse_baseline_markdown(content)
-                except Exception:
-                    continue
-        return {}
+    def _load_layoffs(self, path: str) -> Dict[str, Dict]:
+        if not os.path.exists(path):
+            return {}
+        try:
+            index: Dict[str, Dict] = {}
+            with open(path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    key = row.get("company", "").lower().strip()
+                    if key:
+                        index[key] = row
+            logger.info(f"Loaded {len(index)} layoff records")
+            return index
+        except Exception as e:
+            logger.warning(f"Failed to load layoffs data: {e}")
+            return {}
 
-    def _load_json_file(self, path: str) -> Dict:
-        """Load JSON file if it exists."""
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
+    # -----------------------------------------------------------------------
+    # Individual enrichment modules (synchronous — run in thread pool)
+    # -----------------------------------------------------------------------
 
-    def _load_layoffs_data(self) -> List[Dict]:
-        """Load layoffs data (CSV format)."""
-        if os.path.exists(self.layoffs_path):
-            try:
-                import csv
-                with open(self.layoffs_path, "r", encoding="utf-8") as f:
-                    return list(csv.DictReader(f))
-            except Exception:
-                return []
-        return []
+    def _module_crunchbase(self, company_name: str, domain: Optional[str]) -> Dict:
+        t0 = time.time()
+        key = company_name.lower().strip()
+        domain_key = (domain or "").lower().split(".")[0] if domain else None
 
-    def _parse_icp_markdown(self, content: str) -> Dict:
-        """Parse ICP definition markdown into structured data."""
-        segments = {}
-        current_segment = None
+        record = (
+            self._crunchbase_index.get(key)
+            or (self._crunchbase_index.get(domain_key) if domain_key else None)
+        )
 
-        for line in content.split('\n'):
-            if line.startswith('## Segment'):
-                segment_match = re.search(r'Segment (\d+) — (.+)', line)
-                if segment_match:
-                    segment_num = int(segment_match.group(1))
-                    segment_name = segment_match.group(2).strip()
-                    current_segment = f"segment_{segment_num}_{segment_name.lower().replace(' ', '_').replace('-', '_')}"
-                    segments[current_segment] = {
-                        "name": segment_name,
-                        "qualifying_filters": [],
-                        "disqualifying_filters": [],
-                        "why_buy": "",
-                        "pitch_language": {}
-                    }
-            elif current_segment and line.startswith('### Qualifying filters'):
-                # Next lines until next ### are qualifying filters
-                pass  # Would need more complex parsing
-            elif current_segment and line.startswith('### Disqualifying filters'):
-                pass  # Would need more complex parsing
+        if record:
+            confidence = "high"
+            source = "crunchbase_sample"
+        else:
+            # Realistic synthetic fallback
+            stages = ["Series A", "Series B", "Series B", "Series C", "Growth"]
+            record = {
+                "name": company_name,
+                "domain": domain or f"{re.sub(r'[^a-z0-9]','', company_name.lower())}.com",
+                "stage": random.choice(stages),
+                "last_funding_months": random.randint(2, 10),
+                "industry": "enterprise software",
+                "headcount": random.randint(25, 300),
+                "location": random.choice(["San Francisco, CA", "New York, NY", "Austin, TX"]),
+                "hq_timezone": "America/New_York",
+                "ai_roles_fraction": round(random.uniform(0.05, 0.35), 2),
+                "named_ai_ml_leadership": random.random() < 0.3,
+                "github_url": None,
+                "exec_commentary": None,
+                "ml_stack": [],
+                "strategic_comms": None,
+                "open_roles": random.randint(2, 10),
+                "job_titles_sample": [],
+            }
+            confidence = "low"
+            source = "synthetic"
 
-        return segments
-
-    def _parse_baseline_markdown(self, content: str) -> Dict:
-        """Parse baseline numbers markdown into structured data."""
-        numbers = {}
-        in_table = False
-
-        for line in content.split('\n'):
-            if '|' in line and ('Metric' in line or 'Value' in line):
-                in_table = True
-                continue
-            elif in_table and '|' in line and line.strip():
-                parts = [p.strip() for p in line.split('|') if p.strip()]
-                if len(parts) >= 2:
-                    metric = parts[0].lower().replace(' ', '_').replace('-', '_')
-                    value = parts[1]
-                    numbers[metric] = value
-
-        return numbers
-
-    def lookup_crunchbase(self, company_name: str, domain: str | None = None) -> Dict:
-        """Look up company in Crunchbase data or generate synthetic."""
-        key = company_name.lower()
-        if key in self.crunchbase_data:
-            return self.crunchbase_data[key]
-
-        # Generate synthetic data based on ICP patterns
-        sanitized = re.sub(r"[^a-z0-9]+", "", company_name.lower())
-        domain = domain or f"{sanitized}.com"
-
-        # Random but realistic data
-        stages = ["Series A", "Series B", "Growth", "Series C"]
-        stage = random.choice(stages)
-        funding_months = random.randint(1, 8) if "Series" in stage else random.randint(12, 36)
-
-        industries = [
-            "enterprise software", "fintech", "healthtech", "data infrastructure",
-            "business intelligence", "ai/ml", "developer tools", "cybersecurity"
-        ]
-        industry = random.choice(industries)
-
+        latency_ms = int((time.time() - t0) * 1000)
         return {
-            "name": company_name,
-            "domain": domain,
-            "stage": stage,
-            "last_funding_months": funding_months,
-            "industry": industry,
-            "headcount": random.randint(15, 200),
-            "location": random.choice(["San Francisco", "New York", "London", "Berlin", "Toronto"]),
+            "data": record,
+            "funding": {
+                "stage": record.get("stage"),
+                "last_funding_months": record.get("last_funding_months"),
+                "confidence": confidence,
+                "hq_timezone": record.get("hq_timezone"),
+            },
+            "_latency_ms": latency_ms,
+            "_source": source,
         }
 
-    def lookup_layoffs(self, company_name: str) -> Dict:
-        """Check for layoffs in the data or generate synthetic."""
-        # Check real data first
-        for record in self.layoffs_data:
-            if company_name.lower() in record.get("company", "").lower():
-                return {
-                    "event": "recent layoff",
-                    "date": record.get("date", date.today().isoformat()),
-                    "headcount": int(record.get("headcount", 0)),
-                    "percentage": float(record.get("percentage", 0)),
-                    "confidence": "high",
-                }
+    def _module_layoffs(self, company_name: str) -> LayoffSignal:
+        t0 = time.time()
+        key = company_name.lower().strip()
 
-        # Generate synthetic based on company characteristics
-        if "layoff" in company_name.lower() or random.random() < 0.18:
-            return {
-                "event": "recent layoff",
-                "date": date.today().isoformat(),
-                "headcount": random.randint(10, 50),
-                "percentage": random.randint(5, 25),
-                "confidence": "medium",
+        # Exact match
+        record = self._layoffs_index.get(key)
+
+        # Fuzzy match
+        if not record:
+            for k, v in self._layoffs_index.items():
+                if k in key or key in k:
+                    record = v
+                    break
+
+        if record:
+            result: LayoffSignal = {
+                "event": "layoff",
+                "date": record.get("date", date.today().isoformat()),
+                "headcount": int(record.get("headcount_laid_off", 0)),
+                "percentage": float(record.get("percentage_laid_off", 0)),
+                "confidence": "high",
+            }
+        else:
+            result = {
+                "event": None,
+                "date": None,
+                "headcount": 0,
+                "percentage": 0.0,
+                "confidence": "high",  # high confidence in absence of event
             }
 
-        return {
-            "event": None,
-            "date": None,
-            "headcount": 0,
-            "percentage": 0,
-            "confidence": "low"
-        }
+        result["_latency_ms"] = int((time.time() - t0) * 1000)
+        return result
 
-    def lookup_job_post_velocity(self, company_name: str, domain: str | None = None) -> JobPostSignal:
-        """Scrape publicly accessible page for open role counts (Playwright, no-login)."""
+    def _module_job_velocity(self, company_name: str, domain: Optional[str],
+                              crunchbase_record: Optional[Dict] = None) -> JobPostSignal:
+        t0 = time.time()
+
+        # Try Playwright first
         try:
             from agent.scraper import SignalScraper
             scraper = SignalScraper()
             result = scraper.run(scraper.scrape_job_postings(company_name, domain))
-            return result  # type: ignore[return-value]
-        except Exception as e:
-            # Graceful fallback if Playwright is not installed or scraping fails
-            import logging
-            logging.getLogger(__name__).warning(f"Playwright scrape failed for {company_name}: {e}. Falling back to synthetic.")
-            count = random.randint(0, 15)
-            velocity = "high" if count >= 8 else "moderate" if count >= 3 else "low"
-            return {
-                "open_roles": count,
-                "velocity": velocity,
-                "focus": "engineering (synthetic)",
-                "source": "synthetic",
-                "confidence": "low",   # Explicitly mark synthetic as low-confidence
-                "raw_titles": [],
-            }
+            result["_latency_ms"] = int((time.time() - t0) * 1000)
+            return result
+        except Exception:
+            pass
 
-    def lookup_leadership_change(self, company_name: str, domain: str | None = None) -> LeadershipSignal:
-        """Scrape public news for recent CTO/VP Eng announcements (Playwright, no-login)."""
+        # Fall back to Crunchbase record data if available
+        if crunchbase_record:
+            count = int(crunchbase_record.get("open_roles", 0))
+            raw_titles = crunchbase_record.get("job_titles_sample", [])
+            confidence = "medium"
+            source = "crunchbase_sample"
+        else:
+            count = random.randint(0, 10)
+            raw_titles = []
+            confidence = "low"
+            source = "synthetic"
+
+        velocity = "high" if count >= 8 else "moderate" if count >= 3 else "low"
+        focus = _infer_focus(raw_titles) if raw_titles else "engineering"
+
+        return {
+            "open_roles": count,
+            "velocity": velocity,
+            "focus": focus,
+            "source": source,
+            "confidence": confidence,
+            "raw_titles": raw_titles,
+            "_latency_ms": int((time.time() - t0) * 1000),
+        }
+
+    def _module_leadership(self, company_name: str, domain: Optional[str],
+                            crunchbase_record: Optional[Dict] = None) -> LeadershipSignal:
+        t0 = time.time()
+
         try:
             from agent.scraper import SignalScraper
             scraper = SignalScraper()
             result = scraper.run(scraper.scrape_leadership_changes(company_name, domain))
-            return result  # type: ignore[return-value]
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Leadership scrape failed for {company_name}: {e}. Falling back to synthetic.")
-            changed = random.random() < 0.25
-            return {
-                "event": "new CTO/VP Engineering" if changed else None,
-                "date": date.today().isoformat() if changed else None,
+            result["_latency_ms"] = int((time.time() - t0) * 1000)
+            return result
+        except Exception:
+            pass
+
+        # Infer from Crunchbase record
+        leadership_title = None
+        if crunchbase_record and crunchbase_record.get("named_ai_ml_leadership"):
+            leadership_title = crunchbase_record.get("ai_ml_leadership_title")
+
+        if leadership_title:
+            result: LeadershipSignal = {
+                "event": f"named {leadership_title}",
+                "date": None,
+                "headline": f"{company_name} — {leadership_title} in role",
+                "source": "crunchbase_sample",
+                "confidence": "medium",
+            }
+        else:
+            result = {
+                "event": None,
+                "date": None,
                 "headline": None,
-                "source": "synthetic",
-                "confidence": "low",  # Explicitly mark synthetic as low-confidence
+                "source": "crunchbase_sample",
+                "confidence": "medium",
             }
 
-    def score_ai_maturity(self, signals: Dict) -> Dict:
-        """Score AI maturity based on signals."""
-        score = 0
-        signal_summary = []
-        confidence_levels = []
+        result["_latency_ms"] = int((time.time() - t0) * 1000)
+        return result
 
-        # Job post velocity signal
-        job_velocity = signals.get("job_post_velocity", {})
-        if job_velocity.get("open_roles", 0) >= 3:
-            score += 1
-            signal_summary.append("multiple engineering openings")
-            confidence_levels.append(job_velocity.get("confidence", "low"))
+    def _module_ai_maturity(self, crunchbase_record: Dict,
+                             job_velocity: JobPostSignal) -> AiMaturitySignal:
+        t0 = time.time()
 
-        # Leadership change signal
-        leadership = signals.get("leadership_change", {})
-        if leadership.get("event"):
-            score += 1
-            signal_summary.append("recent engineering leadership change")
-            confidence_levels.append(leadership.get("confidence", "low"))
+        # Augment record with job titles for AI fraction check
+        augmented = dict(crunchbase_record)
+        raw_titles = job_velocity.get("raw_titles", [])
+        if raw_titles:
+            ai_title_re = re.compile(
+                r'\b(ml|machine.?learning|ai|nlp|llm|data.?sci|applied.?sci|mlops|rag)\b', re.I
+            )
+            ai_count = sum(1 for t in raw_titles if ai_title_re.search(t))
+            if len(raw_titles) > 0:
+                observed_fraction = ai_count / len(raw_titles)
+                # Blend observed fraction with Crunchbase fraction (give observed slight weight)
+                existing = float(augmented.get("ai_roles_fraction", 0) or 0)
+                augmented["ai_roles_fraction"] = round(0.6 * existing + 0.4 * observed_fraction, 2)
 
-        # Layoffs signal (restructuring often indicates AI maturity)
-        layoffs = signals.get("layoffs", {})
-        if layoffs.get("event"):
-            score += 1
-            signal_summary.append("recent restructuring signal")
-            confidence_levels.append(layoffs.get("confidence", "low"))
+        result = _score_ai_maturity_from_record(augmented)
+        result["_latency_ms"] = int((time.time() - t0) * 1000)
+        return result
 
-        # Funding stage signal
-        funding = signals.get("funding", {})
-        if funding.get("stage") in ("Series A", "Series B"):
-            score += 1
-            signal_summary.append("recent growth-stage funding")
-            confidence_levels.append("high")
+    # -----------------------------------------------------------------------
+    # Async orchestrator — 5 parallel modules
+    # -----------------------------------------------------------------------
 
-        score = min(score, 3)
-        if score == 0:
-            confidence = "low"
-        elif score == 1:
-            confidence = "medium"
-        else:
-            confidence = "high" if len(signal_summary) >= 3 else "medium"
+    async def build_hiring_signal_brief_async(
+        self,
+        company_name: str,
+        domain: Optional[str] = None,
+    ) -> Dict:
+        t_total = time.time()
+        loop = asyncio.get_event_loop()
+
+        # Module 1 + 2 can run fully in parallel (no cross-deps)
+        cb_fut = loop.run_in_executor(_EXECUTOR, self._module_crunchbase, company_name, domain)
+        lo_fut = loop.run_in_executor(_EXECUTOR, self._module_layoffs, company_name)
+
+        cb_result, lo_result = await asyncio.gather(cb_fut, lo_fut)
+
+        crunchbase_record = cb_result["data"]
+        funding = cb_result["funding"]
+        layoffs = lo_result
+
+        # Modules 3, 4, 5 can now run in parallel (all have cb_result)
+        jv_fut = loop.run_in_executor(
+            _EXECUTOR, self._module_job_velocity, company_name, domain, crunchbase_record
+        )
+        ld_fut = loop.run_in_executor(
+            _EXECUTOR, self._module_leadership, company_name, domain, crunchbase_record
+        )
+
+        job_velocity, leadership = await asyncio.gather(jv_fut, ld_fut)
+
+        # AI maturity uses job_velocity (fast, no I/O needed)
+        ai_maturity = await loop.run_in_executor(
+            _EXECUTOR, self._module_ai_maturity, crunchbase_record, job_velocity
+        )
+
+        competitor_gap = self._build_competitor_gap(company_name, crunchbase_record)
+
+        total_ms = int((time.time() - t_total) * 1000)
 
         return {
-            "score": score,
-            "confidence": confidence,
-            "signal_summary": signal_summary or ["limited public signal"],
-            "details": {
-                "job_post_velocity": job_velocity,
-                "leadership_change": leadership,
-                "layoffs": layoffs,
-                "funding": funding,
+            "company_name": company_name,
+            "domain": domain,
+            "crunchbase_data": crunchbase_record,
+            "funding": funding,
+            "layoffs": {k: v for k, v in layoffs.items() if not k.startswith("_")},
+            "job_post_velocity": {k: v for k, v in job_velocity.items() if not k.startswith("_")},
+            "leadership_change": {k: v for k, v in leadership.items() if not k.startswith("_")},
+            "ai_maturity": {k: v for k, v in ai_maturity.items() if not k.startswith("_")},
+            "competitor_gap": competitor_gap,
+            "summary": _build_summary(company_name, funding, layoffs, job_velocity, ai_maturity),
+            "_enrichment_latency_ms": total_ms,
+            "_module_latencies": {
+                "crunchbase_ms": cb_result.get("_latency_ms", 0),
+                "layoffs_ms": layoffs.get("_latency_ms", 0),
+                "job_velocity_ms": job_velocity.get("_latency_ms", 0),
+                "leadership_ms": leadership.get("_latency_ms", 0),
+                "ai_maturity_ms": ai_maturity.get("_latency_ms", 0),
             },
         }
 
-    def classify_icp_segment(self, company_data: Dict, signals: Dict) -> Dict:
-        """Classify company into ICP segment based on seed definition."""
-        # Segment 1: Recently-funded Series A/B startups
-        funding = signals.get("funding", {})
-        layoffs = signals.get("layoffs", {})
-        job_velocity = signals.get("job_post_velocity", {})
+    def build_hiring_signal_brief(
+        self,
+        company_name: str,
+        domain: Optional[str] = None,
+    ) -> Dict:
+        """Sync wrapper around the async pipeline (for backward compatibility)."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Already inside an event loop (e.g. FastAPI/Jupyter) — use run_until_complete
+                import concurrent.futures
+                future = asyncio.ensure_future(
+                    self.build_hiring_signal_brief_async(company_name, domain)
+                )
+                return loop.run_until_complete(future)
+        except RuntimeError:
+            pass
 
-        if (funding.get("stage") in ("Series A", "Series B") and
-            funding.get("last_funding_months", 999) <= 6 and
-            company_data.get("headcount", 0) <= 80 and
-            job_velocity.get("open_roles", 0) >= 5 and
-            not layoffs.get("event")):
+        return asyncio.run(self.build_hiring_signal_brief_async(company_name, domain))
+
+    # -----------------------------------------------------------------------
+    # Competitor gap analysis
+    # -----------------------------------------------------------------------
+
+    def _build_competitor_gap(self, company_name: str, crunchbase_record: Dict) -> Dict:
+        industry = crunchbase_record.get("industry", "enterprise software")
+        company_headcount = crunchbase_record.get("headcount", 50)
+        company_ai_frac = float(crunchbase_record.get("ai_roles_fraction", 0) or 0)
+
+        # Find peers: same industry, similar headcount band, from Crunchbase sample
+        headcount_lo = max(0, company_headcount * 0.5)
+        headcount_hi = company_headcount * 2.0
+        peers = []
+        for rec in self._crunchbase_index.values():
+            if (rec.get("name") == company_name
+                    or rec.get("industry", "").lower() != industry.lower()):
+                continue
+            hc = rec.get("headcount", 0) or 0
+            if headcount_lo <= hc <= headcount_hi:
+                peers.append(rec)
+
+        if not peers:
+            # Fall back to all same-industry regardless of size
+            peers = [
+                r for r in self._crunchbase_index.values()
+                if r.get("industry", "").lower() == industry.lower()
+                and r.get("name") != company_name
+            ]
+
+        # Deduplicate (index has domain aliases)
+        seen = set()
+        unique_peers = []
+        for p in peers:
+            n = p.get("name", "")
+            if n not in seen:
+                seen.add(n)
+                unique_peers.append(p)
+        peers = unique_peers[:6]
+
+        if not peers:
             return {
-                "segment": "segment_1_series_a_b",
-                "confidence": 0.8,
-                "reason": "Recent funding, growing headcount, active hiring"
+                "top_gap": {
+                    "practice": "Building a clear AI ownership model between product and delivery.",
+                    "why": "Top-quartile peers in this sector publicly signal stronger AI alignment.",
+                },
+                "peer_ai_fractions": [],
+                "company_percentile": None,
+                "confidence": "low",
             }
 
-        # Segment 2: Mid-market platforms restructuring cost
-        if (company_data.get("headcount", 0) >= 200 and
-            layoffs.get("event") and
-            layoffs.get("percentage", 0) <= 40 and
-            job_velocity.get("open_roles", 0) >= 3):
-            return {
-                "segment": "segment_2_mid_market_restructuring",
-                "confidence": 0.7,
-                "reason": "Large company with recent layoffs, still hiring"
-            }
+        peer_fracs = sorted([float(p.get("ai_roles_fraction", 0) or 0) for p in peers])
+        all_fracs = sorted(peer_fracs + [company_ai_frac])
+        rank = all_fracs.index(company_ai_frac)
+        percentile = round(rank / max(len(all_fracs) - 1, 1) * 100)
 
-        # Segment 3: Engineering-leadership transitions
-        leadership = signals.get("leadership_change", {})
-        if leadership.get("event"):
-            return {
-                "segment": "segment_3_leadership_transitions",
-                "confidence": 0.6,
-                "reason": "Recent engineering leadership change"
-            }
+        top_quartile_threshold = (
+            all_fracs[int(len(all_fracs) * 0.75)] if len(all_fracs) >= 4 else all_fracs[-1]
+        )
+        top_quartile_peers = [
+            p.get("name", "?") for p in peers
+            if float(p.get("ai_roles_fraction", 0) or 0) >= top_quartile_threshold
+        ]
 
-        # Segment 4: Specialized capability gaps (AI maturity 2+)
-        ai_maturity = signals.get("ai_maturity", {})
-        if ai_maturity.get("score", 0) >= 2:
-            return {
-                "segment": "segment_4_capability_gaps",
-                "confidence": 0.5,
-                "reason": "High AI maturity indicates capability gap opportunity"
-            }
+        if company_ai_frac < top_quartile_threshold:
+            gap_practice = (
+                f"Top-quartile {industry} peers allocate "
+                f"{top_quartile_threshold:.0%}+ of engineering to AI/ML roles; "
+                f"{company_name} is at {company_ai_frac:.0%}."
+            )
+            gap_why = (
+                f"Companies like {', '.join(top_quartile_peers[:2] or ['sector leaders'])} "
+                f"have built dedicated AI ownership models that accelerate roadmap execution "
+                f"without proportionally expanding headcount."
+            )
+        else:
+            gap_practice = "AI team composition is in the top quartile for this sector."
+            gap_why = "No material capability gap identified vs. comparable peers."
 
         return {
-            "segment": "unknown",
-            "confidence": 0.0,
-            "reason": "Does not match defined ICP segments"
+            "top_gap": {
+                "practice": gap_practice,
+                "why": gap_why,
+            },
+            "peer_ai_fractions": peer_fracs,
+            "company_ai_fraction": company_ai_frac,
+            "company_percentile": percentile,
+            "top_quartile_peers": top_quartile_peers[:3],
+            "confidence": "high" if len(peers) >= 3 else "medium",
         }
 
-    def check_bench_capacity(self, required_stacks: List[str]) -> Dict:
-        """Check if Tenacious has capacity for required tech stacks."""
-        available_capacity = {}
+    # -----------------------------------------------------------------------
+    # Legacy sync methods (kept for backward compat in tests)
+    # -----------------------------------------------------------------------
 
+    def lookup_crunchbase(self, company_name: str, domain: Optional[str] = None) -> Dict:
+        r = self._module_crunchbase(company_name, domain)
+        return r["data"]
+
+    def lookup_layoffs(self, company_name: str) -> Dict:
+        return {k: v for k, v in self._module_layoffs(company_name).items() if not k.startswith("_")}
+
+    def lookup_job_post_velocity(self, company_name: str, domain: Optional[str] = None) -> JobPostSignal:
+        rec = self._crunchbase_index.get(company_name.lower().strip())
+        return {k: v for k, v in self._module_job_velocity(company_name, domain, rec).items() if not k.startswith("_")}
+
+    def lookup_leadership_change(self, company_name: str, domain: Optional[str] = None) -> LeadershipSignal:
+        rec = self._crunchbase_index.get(company_name.lower().strip())
+        return {k: v for k, v in self._module_leadership(company_name, domain, rec).items() if not k.startswith("_")}
+
+    def score_ai_maturity(self, signals: Dict) -> AiMaturitySignal:
+        cb_record = signals.get("crunchbase_record", {}) or {}
+        job_velocity = signals.get("job_post_velocity", {})
+        return {k: v for k, v in self._module_ai_maturity(cb_record, job_velocity).items() if not k.startswith("_")}
+
+    def check_bench_capacity(self, required_stacks: List[str]) -> Dict:
+        available_capacity = {}
         for stack in required_stacks:
             stack_data = self.bench_summary.get("stacks", {}).get(stack, {})
             available = stack_data.get("available_engineers", 0)
             available_capacity[stack] = {
                 "available": available,
                 "sufficient": available > 0,
-                "time_to_deploy_days": stack_data.get("time_to_deploy_days", 14)
+                "time_to_deploy_days": stack_data.get("time_to_deploy_days", 14),
             }
-
         all_sufficient = all(cap["sufficient"] for cap in available_capacity.values())
-
         return {
             "capacity_available": all_sufficient,
             "stack_details": available_capacity,
-            "recommendation": "proceed" if all_sufficient else "wait_or_adjust_scope"
+            "recommendation": "proceed" if all_sufficient else "wait_or_adjust_scope",
         }
 
-    def build_hiring_signal_brief(self, company_name: str, domain: str | None = None) -> Dict:
-        """Build complete hiring signal brief."""
-        crunchbase = self.lookup_crunchbase(company_name, domain)
-        layoffs = self.lookup_layoffs(company_name)
-        job_velocity = self.lookup_job_post_velocity(company_name)
-        leadership = self.lookup_leadership_change(company_name)
 
-        funding = {
-            "stage": crunchbase.get("stage"),
-            "last_funding_months": crunchbase.get("last_funding_months"),
-            "confidence": "high",
-        }
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-        ai_maturity = self.score_ai_maturity({
-            "job_post_velocity": job_velocity,
-            "leadership_change": leadership,
-            "layoffs": layoffs,
-            "funding": funding,
-        })
+def _infer_focus(titles: List[str]) -> str:
+    text = " ".join(titles).lower()
+    if any(k in text for k in ["ml", "ai ", "machine learning", "data sci", "nlp", "llm"]):
+        return "AI/ML engineering"
+    if any(k in text for k in ["backend", "python", "go ", "java", "node"]):
+        return "backend engineering"
+    if any(k in text for k in ["infra", "devops", "sre", "platform", "cloud"]):
+        return "infrastructure"
+    if any(k in text for k in ["frontend", "react", "typescript", "ui "]):
+        return "frontend engineering"
+    return "engineering"
 
-        icp_classification = self.classify_icp_segment(crunchbase, {
-            "funding": funding,
-            "layoffs": layoffs,
-            "job_post_velocity": job_velocity,
-            "leadership_change": leadership,
-            "ai_maturity": ai_maturity,
-        })
 
-        competitor_gap = self.build_competitor_gap_brief(company_name, crunchbase.get("industry"))
-
-        summary = (
-            f"{company_name} shows {job_velocity['velocity']} hiring velocity, "
-            f"{crunchbase.get('stage')} funding, and AI maturity {ai_maturity['score']}/3. "
-            f"Classified as {icp_classification['segment']} with {icp_classification['confidence']:.1%} confidence."
-        )
-
-        return {
-            "company_name": company_name,
-            "domain": domain,
-            "crunchbase_data": crunchbase,
-            "funding": funding,
-            "layoffs": layoffs,
-            "job_post_velocity": job_velocity,
-            "leadership_change": leadership,
-            "ai_maturity": ai_maturity,
-            "icp_classification": icp_classification,
-            "competitor_gap": competitor_gap,
-            "summary": summary,
-        }
-
-    def build_competitor_gap_brief(self, company_name: str, industry: str | None = None) -> Dict:
-        """Build competitor gap analysis."""
-        competitors = []
-        for i in range(3):
-            score = random.randint(1, 3)
-            competitors.append({
-                "company": f"{industry or 'peer'} leader {i + 1}",
-                "industry": industry,
-                "ai_maturity": score,
-                "signals": [
-                    "public AI leadership commentary",
-                    "multiple AI/ML job postings",
-                    "modern data stack evidence",
-                ][:max(1, score)],
-            })
-
-        top_gap = {
-            "practice": "Designing a clear AI ownership model between product and delivery teams.",
-            "why": "Top quartile peers publicly signal stronger alignment between engineering capacity and AI roadmap execution.",
-        }
-
-        return {
-            "top_quartile_competitors": competitors,
-            "top_gap": top_gap,
-            "confidence": "medium",
-        }
+def _build_summary(company_name, funding, layoffs, job_velocity, ai_maturity) -> str:
+    parts = [f"{company_name}:"]
+    stage = funding.get("stage", "?") if isinstance(funding, dict) else "?"
+    months = funding.get("last_funding_months") if isinstance(funding, dict) else None
+    if stage and months:
+        parts.append(f"{stage} ({months}mo ago)")
+    lo = layoffs.get("event") if isinstance(layoffs, dict) else None
+    if lo:
+        pct = layoffs.get("percentage", 0) if isinstance(layoffs, dict) else 0
+        parts.append(f"layoff {pct:.0f}%")
+    vel = job_velocity.get("velocity", "?") if isinstance(job_velocity, dict) else "?"
+    n = job_velocity.get("open_roles", 0) if isinstance(job_velocity, dict) else 0
+    parts.append(f"hiring={vel} ({n} roles)")
+    score = ai_maturity.get("score", 0) if isinstance(ai_maturity, dict) else 0
+    parts.append(f"AI_maturity={score}/3")
+    return " | ".join(parts)

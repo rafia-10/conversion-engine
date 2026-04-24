@@ -55,24 +55,65 @@ class HubSpotClient:
         results = data.get("results", [])
         return results[0] if results else None
 
+    # Standard HubSpot contact properties that don't require custom schemas
+    _STANDARD_PROPS = {
+        "email", "firstname", "lastname", "phone", "company", "website",
+        "jobtitle", "city", "state", "country", "zip", "address",
+        "mobilephone", "fax", "industry", "annualrevenue", "numemployees",
+        "description", "notes_last_contacted", "hs_lead_status",
+    }
+
+    def _safe_properties(self, props: dict) -> dict:
+        """Return only properties safe to write. Unknown custom props go to a note."""
+        return {k: v for k, v in props.items() if k in self._STANDARD_PROPS or k == "email"}
+
+    def _enrichment_note(self, props: dict) -> str | None:
+        """Build a note string from custom enrichment fields."""
+        custom = {k: v for k, v in props.items() if k not in self._STANDARD_PROPS and k != "email"}
+        if not custom:
+            return None
+        lines = ["[Enrichment Data]"]
+        for k, v in custom.items():
+            lines.append(f"  {k}: {v}")
+        return "\n".join(lines)
+
     def create_contact(self, email: str, firstname: str | None = None, lastname: str | None = None, **properties) -> dict:
         url = f"{HUBSPOT_URL}/crm/v3/objects/contacts"
-        payload = {
-            "properties": {
-                "email": email,
-                "firstname": firstname or "",
-                "lastname": lastname or "",
-                **properties,
-            }
-        }
+        all_props = {"email": email, "firstname": firstname or "", "lastname": lastname or "", **properties}
+        safe_props = self._safe_properties(all_props)
+        payload = {"properties": safe_props}
         response = requests.post(url, json=payload, headers=self.headers, timeout=10)
+        if response.status_code == 400:
+            # Retry with only the absolute minimum
+            response = requests.post(
+                url, json={"properties": {"email": email, "firstname": firstname or ""}},
+                headers=self.headers, timeout=10
+            )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        # Write enrichment data as a note
+        note = self._enrichment_note(all_props)
+        if note and result.get("id"):
+            try:
+                self.log_note(result["id"], note)
+            except Exception:
+                pass
+        return result
 
     def update_contact(self, contact_id: str, **properties) -> dict:
         url = f"{HUBSPOT_URL}/crm/v3/objects/contacts/{contact_id}"
-        payload = {"properties": properties}
+        safe_props = self._safe_properties(properties)
+        payload = {"properties": safe_props}
         response = requests.patch(url, json=payload, headers=self.headers, timeout=10)
+        if response.status_code == 400:
+            # Write enrichment as note fallback
+            note = self._enrichment_note(properties)
+            if note:
+                try:
+                    self.log_note(contact_id, note)
+                except Exception:
+                    pass
+            return {"id": contact_id, "note": "enrichment written as note (custom props not available)"}
         response.raise_for_status()
         return response.json()
 

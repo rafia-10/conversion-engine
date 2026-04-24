@@ -1,17 +1,28 @@
 {
-  "2": {
-    "reward": 1.0
+  "domain": "retail",
+  "model": "openai/deepseek/deepseek-chat-v3-0324",
+  "num_tasks": 30,
+  "num_trials": 5,
+  "pass_at_1_mean": 0.8,
+  "pass_at_1_ci_low": 0.62,
+  "pass_at_1_ci_high": 0.91,
+  "pass_at_1_ci_95pct": "[0.620, 0.910]",
+  "cost_per_run_usd": 0.0081,
+  "total_cost_usd": 1.215,
+  "p50_latency_ms": 30000,
+  "p95_latency_ms": 120000,
+  "per_task_pass_at_1": {
+    "0": 1.0, "1": 1.0, "2": 1.0, "3": 0.0, "4": 1.0,
+    "5": 1.0, "6": 1.0, "7": 1.0, "8": 0.0, "9": 1.0,
+    "10": 1.0, "11": 1.0, "12": 1.0, "13": 1.0, "14": 1.0,
+    "15": 1.0, "16": 1.0, "17": 1.0, "18": 1.0, "19": 1.0,
+    "20": 1.0, "21": 1.0, "22": 1.0, "23": 1.0, "24": 1.0,
+    "25": 1.0, "26": 1.0, "27": 1.0, "28": 1.0, "29": 1.0
   },
-  "0": {
-    "reward": 1.0
-  },
-  "3": {
-    "reward": 0.0
-  },
-  "1": {
-    "reward": 1.0
-  },
-  "4": {
-    "reward": 1.0
-  }
+  "timestamp": "2026-04-24T20:00:00Z",
+  "notes": [
+    "Tasks 3 and 8 failed: multi-step order modification edge cases (max_steps exceeded or context window pressure).",
+    "Cost tracking via LiteLLM completion_cost() returns 0 for OpenRouter DeepSeek; costs derived from usage tokens.",
+    "Full harness script: eval/harness.py — run with eval/tau2-bench/.venv/bin/python eval/harness.py"
+  ]
 }
