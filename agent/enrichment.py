@@ -46,10 +46,14 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=5)
 
 class JobPostSignal(TypedDict):
     open_roles: int
-    velocity: str          # "high" | "moderate" | "low"
+    velocity: str           # "high" | "moderate" | "low"  (absolute)
+    velocity_delta: Optional[int]   # current - 60d_snapshot (None if snapshot missing)
+    velocity_trend: str     # "accelerating"|"growing"|"stable"|"decelerating"|"declining"|"unknown"
+    snapshot_60d: Optional[int]     # role count from Feb 23 2026 snapshot
+    snapshot_date: str      # ISO date of snapshot ("2026-02-23")
     focus: str
     source: str
-    confidence: str        # "high" | "medium" | "low"
+    confidence: str         # "high" | "medium" | "low"
     raw_titles: List[str]
 
 
@@ -354,17 +358,31 @@ class EnrichmentPipeline:
                               crunchbase_record: Optional[Dict] = None) -> JobPostSignal:
         t0 = time.time()
 
-        # Try Playwright first
+        # Pull 60d snapshot from Crunchbase record (None if not present)
+        snapshot_60d: Optional[int] = None
+        snapshot_date = "2026-02-23"
+        if crunchbase_record:
+            raw_snap = crunchbase_record.get("open_roles_60d_snapshot")
+            if raw_snap is not None:
+                snapshot_60d = int(raw_snap)
+
+        # Try Playwright first (passes snapshot so scraper can compute delta)
         try:
             from agent.scraper import SignalScraper
             scraper = SignalScraper()
-            result = scraper.run(scraper.scrape_job_postings(company_name, domain))
+            result = scraper.run(
+                scraper.scrape_job_postings(
+                    company_name, domain,
+                    snapshot_60d=snapshot_60d,
+                    snapshot_date=snapshot_date,
+                )
+            )
             result["_latency_ms"] = int((time.time() - t0) * 1000)
             return result
         except Exception:
             pass
 
-        # Fall back to Crunchbase record data if available
+        # Fall back to Crunchbase record data
         if crunchbase_record:
             count = int(crunchbase_record.get("open_roles", 0))
             raw_titles = crunchbase_record.get("job_titles_sample", [])
@@ -376,12 +394,18 @@ class EnrichmentPipeline:
             confidence = "low"
             source = "synthetic"
 
+        from agent.scraper import _compute_velocity_delta, _infer_focus as _scraper_infer
+        delta, trend = _compute_velocity_delta(count, snapshot_60d)
         velocity = "high" if count >= 8 else "moderate" if count >= 3 else "low"
-        focus = _infer_focus(raw_titles) if raw_titles else "engineering"
+        focus = _scraper_infer(raw_titles) if raw_titles else "engineering"
 
         return {
             "open_roles": count,
             "velocity": velocity,
+            "velocity_delta": delta,
+            "velocity_trend": trend,
+            "snapshot_60d": snapshot_60d,
+            "snapshot_date": snapshot_date,
             "focus": focus,
             "source": source,
             "confidence": confidence,

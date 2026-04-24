@@ -215,16 +215,22 @@ def _extract_grounded_signals(company, funding, layoffs, job_vel, leadership, ai
             f"Layoff event: {layoffs.get('headcount', '?')} affected "
             f"({layoffs.get('percentage', '?')}%) — {layoffs.get('date', 'recent')}"
         )
-    if job_vel.get("open_roles", 0) >= 5:
-        signals["hiring"] = (
-            f"{job_vel['open_roles']} open engineering roles "
-            f"(confidence: {job_vel.get('confidence', 'low')})"
-        )
-    elif job_vel.get("open_roles", 0) >= 2:
-        signals["hiring"] = (
-            f"{job_vel['open_roles']} open roles — early hiring signal "
-            f"(confidence: {job_vel.get('confidence', 'low')})"
-        )
+    open_roles = job_vel.get("open_roles", 0)
+    delta = job_vel.get("velocity_delta")
+    trend = job_vel.get("velocity_trend", "unknown")
+    conf = job_vel.get("confidence", "low")
+
+    if open_roles >= 5:
+        delta_str = ""
+        if delta is not None and trend not in ("unknown", "stable"):
+            direction = "up" if delta > 0 else "down"
+            delta_str = f"; {abs(delta)} roles {direction} vs 60-day snapshot ({trend})"
+        signals["hiring"] = f"{open_roles} open engineering roles{delta_str} (confidence: {conf})"
+    elif open_roles >= 2:
+        delta_str = ""
+        if delta is not None and delta > 0:
+            delta_str = f"; +{delta} vs 60-day snapshot"
+        signals["hiring"] = f"{open_roles} open roles — early hiring signal{delta_str} (confidence: {conf})"
     if leadership.get("event"):
         signals["leadership"] = leadership.get("headline") or leadership["event"]
     if ai_score > 0:
