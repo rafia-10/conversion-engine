@@ -9,18 +9,20 @@ load_dotenv()
 
 
 class AfricaTalkingClient:
-    BASE_URL = "https://api.africastalking.com/version1/messaging"
+    PROD_URL    = "https://api.africastalking.com/version1/messaging"
+    SANDBOX_URL = "https://api.sandbox.africastalking.com/version1/messaging"
 
     def __init__(self):
         self.username = os.getenv("AFRICASTALK_USERNAME", "sandbox")
         self.api_key = (
             os.getenv("AFRICASTALK_API_KEY")
-            or os.getenv("AFRICA'STALK_API_KEY")
             or os.getenv("AFRICASTALK_KEY")
         )
         self.sender = os.getenv("AFRICASTALK_SENDER", "Tenacious")
         self.timeout = int(os.getenv("AFRICASTALK_TIMEOUT_SECONDS", "10"))
         self.hubspot = HubSpotClient()
+        # Use sandbox endpoint when username is "sandbox"
+        self.base_url = self.SANDBOX_URL if self.username == "sandbox" else self.PROD_URL
 
         if not self.api_key:
             raise ValueError("Missing AFRICASTALK_API_KEY in environment")
@@ -88,11 +90,13 @@ class AfricaTalkingClient:
             "username": self.username,
             "to": to,
             "message": message,
-            "from": self.sender,
         }
+        # Sandbox rejects custom sender IDs — only add in production
+        if self.username != "sandbox" and self.sender:
+            payload["from"] = self.sender
 
         response = requests.post(
-            self.BASE_URL,
+            self.base_url,
             data=payload,
             headers={"apiKey": self.api_key, "Content-Type": "application/x-www-form-urlencoded"},
             timeout=self.timeout,

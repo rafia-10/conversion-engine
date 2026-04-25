@@ -1,8 +1,8 @@
 """
-langfuse_client.py — Thin wrapper around Langfuse for pipeline observability.
+langfuse_client.py — Thin wrapper around Langfuse v4 for pipeline observability.
 
-Emits per-module latency, token cost, and segment outcome as a single trace
-per prospect processed. Falls back gracefully if Langfuse is not configured.
+Emits per-module latency and segment outcome as a single trace per prospect.
+Falls back gracefully (local JSONL only) if Langfuse is not configured.
 """
 import json
 import logging
@@ -22,8 +22,6 @@ _LOCAL_TRACE_LOG = Path(os.getenv("LANGFUSE_LOCAL_LOG", "outputs/langfuse_traces
 
 
 class _SpanRecorder:
-    """Records a single span (module) within a trace."""
-
     def __init__(self, trace: "PipelineTrace", name: str):
         self._trace = trace
         self._name = name
@@ -40,8 +38,6 @@ class _SpanRecorder:
 
 
 class PipelineTrace:
-    """Single prospect pipeline trace."""
-
     def __init__(self, trace_id: str, company: str, contact_email: str):
         self.trace_id = trace_id
         self.company = company
@@ -49,53 +45,50 @@ class PipelineTrace:
         self._t0 = time.time()
         self._spans: list[Dict] = []
         self._output: Dict = {}
-        self._lf_trace = None
 
-        # Try to initialise Langfuse
+        self._lf = None
+        self._root_cm = None   # context manager kept open for the life of the trace
+        self._root_obs = None  # observation object returned by __enter__
+
         try:
             from langfuse import Langfuse
             secret = os.getenv("LANGFUSE_SECRET_KEY")
             public = os.getenv("LANGFUSE_PUBLIC_KEY")
             base_url = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
             if secret and public:
-                lf = Langfuse(
+                self._lf = Langfuse(
                     secret_key=secret,
                     public_key=public,
                     host=base_url,
                 )
-                self._lf_trace = lf.trace(
+                self._root_cm = self._lf.start_as_current_observation(
                     name=f"conversion-engine/{company}",
-                    id=trace_id,
                     metadata={"company": company, "contact_email": contact_email},
                 )
+                self._root_obs = self._root_cm.__enter__()
         except Exception as e:
             logger.debug(f"Langfuse init skipped: {e}")
 
     @contextmanager
     def span(self, name: str):
-        """Context manager for timing a pipeline module."""
         rec = _SpanRecorder(self, name)
+        if self._lf and self._root_obs:
+            try:
+                with self._lf.start_as_current_observation(name=name) as lf_span:
+                    yield rec
+                    latency_ms = rec.end()
+                    lf_span.update(metadata={**rec._metadata, "latency_ms": latency_ms})
+                return
+            except Exception as e:
+                logger.debug(f"Langfuse span error: {e}")
+        # fallback — no Langfuse
         try:
             yield rec
         finally:
             rec.end()
 
     def _record_span(self, name: str, latency_ms: int, output: Any, metadata: Dict):
-        entry = {
-            "name": name,
-            "latency_ms": latency_ms,
-            "metadata": metadata,
-        }
-        self._spans.append(entry)
-
-        if self._lf_trace:
-            try:
-                self._lf_trace.span(
-                    name=name,
-                    metadata={**metadata, "latency_ms": latency_ms},
-                )
-            except Exception as e:
-                logger.debug(f"Langfuse span error: {e}")
+        self._spans.append({"name": name, "latency_ms": latency_ms, "metadata": metadata})
 
     def finish(self, segment: str, confidence: float, ai_maturity_score: int,
                send_status: str, total_tokens: int = 0, cost_usd: float = 0.0):
@@ -110,7 +103,7 @@ class PipelineTrace:
             "total_latency_ms": total_ms,
         }
 
-        # Flush to local JSONL
+        # Write local JSONL
         _LOCAL_TRACE_LOG.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "trace_id": self.trace_id,
@@ -125,10 +118,10 @@ class PipelineTrace:
         except Exception as e:
             logger.warning(f"Failed to write local trace: {e}")
 
-        # Flush to Langfuse
-        if self._lf_trace:
+        # Flush Langfuse — update root observation then close context
+        if self._lf and self._root_cm and self._root_obs:
             try:
-                self._lf_trace.update(
+                self._root_obs.update(
                     output=json.dumps(self._output),
                     metadata={
                         "segment": segment,
@@ -138,14 +131,20 @@ class PipelineTrace:
                     },
                 )
             except Exception as e:
-                logger.debug(f"Langfuse trace finish error: {e}")
+                logger.debug(f"Langfuse root update error: {e}")
+            try:
+                self._root_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+            try:
+                self._lf.flush()
+            except Exception as e:
+                logger.debug(f"Langfuse flush error: {e}")
 
         return record
 
 
 class TracingClient:
-    """Factory for creating per-prospect traces."""
-
     _instance: Optional["TracingClient"] = None
 
     def new_trace(self, company: str, contact_email: str) -> PipelineTrace:
@@ -162,5 +161,4 @@ class TracingClient:
         return cls._instance
 
 
-# Module-level singleton
 tracing = TracingClient.get()
