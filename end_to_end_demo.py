@@ -316,6 +316,11 @@ def outreach():
         _ok("Intercepted -> outputs/sandbox_sink.jsonl  (no real email sent)")
     else:
         _ok(f"Email sent live via Resend  (reply_to: {os.getenv('RESEND_REPLY_TO', '?')})")
+    hs = trace.get("hubspot", {})
+    if hs.get("id"):
+        _ok(f"HubSpot contact upserted  (id: {hs['id']})")
+    elif hs.get("error"):
+        _warn(f"HubSpot upsert failed: {hs['error']}")
     print()
     _ok(f"Total latency : {trace.get('latency_ms',0)}ms")
     _ok(f"Output dir    : {trace.get('output_dir','?')}")

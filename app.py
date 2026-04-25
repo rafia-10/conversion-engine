@@ -289,10 +289,13 @@ async def email_inbound(request: Request, background_tasks: BackgroundTasks):
     logger.info("Email inbound parsed: from=%r subject=%r text_len=%d",
                 from_addr, subject, len(reply_text))
 
+    # Always return 200 — Cloudmailin bounces the email if we return 4xx
     if not from_addr:
-        raise HTTPException(400, "could not determine sender email")
+        logger.warning("Email inbound: could not determine sender. Keys: %s", list(data.keys()))
+        return {"status": "skipped", "reason": "no_sender"}
     if not reply_text:
-        raise HTTPException(400, "empty reply body")
+        logger.warning("Email inbound: empty body from %s. Keys: %s", from_addr, list(data.keys()))
+        return {"status": "skipped", "reason": "empty_body"}
 
     events.trigger("email_reply", {"from": from_addr, "text": reply_text, "subject": subject})
     background_tasks.add_task(_run_email_reply, from_addr, reply_text)
@@ -475,3 +478,15 @@ async def test_email_reply(request: Request, background_tasks: BackgroundTasks):
     logger.info("TEST trigger: email reply from=%s", from_addr)
     background_tasks.add_task(_run_email_reply, from_addr, reply_text)
     return {"status": "ok", "from": from_addr, "queued": True}
+
+
+@app.post("/webhook/debug/inbound")
+async def debug_inbound(request: Request):
+    """Echo the raw inbound payload — use to inspect what Cloudmailin sends."""
+    body = await request.body()
+    try:
+        data = json.loads(body)
+    except Exception:
+        data = body.decode("utf-8", errors="replace")
+    logger.info("DEBUG inbound payload: %s", str(data)[:2000])
+    return {"received": data}
