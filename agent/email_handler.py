@@ -27,7 +27,7 @@ class ResendEmailClient:
             "html": html,
         }
         if self.reply_to:
-            payload["reply_to"] = self.reply_to
+            payload["reply_to"] = [self.reply_to]  # Resend requires array
         if text:
             payload["text"] = text
 
