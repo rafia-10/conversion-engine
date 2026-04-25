@@ -69,19 +69,23 @@ class CalComClient:
         notes: str = "",
     ) -> str:
         """
-        Build a Cal.com self-scheduling URL pre-filled with the contact's details.
-        No API call — pure URL construction.
+        Return the Cal.com booking URL.
+
+        If CALCOM_BOOKING_URL is set, use it directly (no params appended).
+        Otherwise build: <base_url>/<username>/<event_slug>?name=...&email=...
 
         Env vars:
-            CALCOM_USERNAME   — Cal.com username / routing slug (default: "tenacious")
-            CALCOM_EVENT_SLUG — Event type slug (default: "discovery-call")
-
-        Returns a URL the prospect can click to book their own slot, e.g.:
-          http://localhost:3000/tenacious/discovery-call?name=Jordan&email=cto@co.com
+            CALCOM_BOOKING_URL — override: full URL used as-is
+            CALCOM_USERNAME    — Cal.com username slug (default: "tenacious")
+            CALCOM_EVENT_SLUG  — event type slug (default: "discovery-call")
         """
-        username = os.getenv("CALCOM_USERNAME", "tenacious")
+        override = os.getenv("CALCOM_BOOKING_URL", "").strip()
+        if override:
+            return override
+
+        username   = os.getenv("CALCOM_USERNAME", "tenacious")
         event_slug = os.getenv("CALCOM_EVENT_SLUG", "discovery-call")
-        base = f"{self.base_url.rstrip('/')}/{username}/{event_slug}"
+        base       = f"{self.base_url.rstrip('/')}/{username}/{event_slug}"
         params: dict = {"name": contact_name, "email": contact_email}
         if notes:
             params["notes"] = notes[:200]
