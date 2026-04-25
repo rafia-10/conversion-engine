@@ -62,8 +62,13 @@ class PipelineTrace:
                     host=base_url,
                 )
                 self._root_cm = self._lf.start_as_current_observation(
-                    name=f"conversion-engine/{company}",
-                    metadata={"company": company, "contact_email": contact_email},
+                    name=f"my-tenacious-engine/{company}",
+                    input={"company": company, "contact_email": contact_email},
+                    metadata={
+                        "company": company,
+                        "contact_email": contact_email,
+                        "project": "my-tenacious-engine",
+                    },
                 )
                 self._root_obs = self._root_cm.__enter__()
         except Exception as e:
@@ -77,7 +82,11 @@ class PipelineTrace:
                 with self._lf.start_as_current_observation(name=name) as lf_span:
                     yield rec
                     latency_ms = rec.end()
-                    lf_span.update(metadata={**rec._metadata, "latency_ms": latency_ms})
+                    lf_span.update(
+                        input=json.dumps(rec._metadata, default=str),
+                        output=json.dumps(rec._metadata, default=str),
+                        metadata={**{k: str(v) for k, v in rec._metadata.items()}, "latency_ms": latency_ms},
+                    )
                 return
             except Exception as e:
                 logger.debug(f"Langfuse span error: {e}")
@@ -122,12 +131,17 @@ class PipelineTrace:
         if self._lf and self._root_cm and self._root_obs:
             try:
                 self._root_obs.update(
-                    output=json.dumps(self._output),
+                    output=json.dumps(self._output, indent=2),
                     metadata={
+                        "project": "my-tenacious-engine",
                         "segment": segment,
-                        "ai_maturity": ai_maturity_score,
+                        "confidence": round(confidence, 3),
+                        "ai_maturity_score": ai_maturity_score,
+                        "send_status": send_status,
                         "total_latency_ms": total_ms,
+                        "total_tokens": total_tokens,
                         "cost_usd": cost_usd,
+                        "span_count": len(self._spans),
                     },
                 )
             except Exception as e:

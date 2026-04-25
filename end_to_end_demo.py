@@ -612,21 +612,39 @@ def langfuse_traces():
 
     for rec in recent:
         _section(f"Trace: {rec['company']}  ({rec['contact_email']})")
-        _field("Trace ID",  rec.get("trace_id", "?"))
+        _field("Trace ID",     rec.get("trace_id", "?"))
         out = rec.get("output", {})
-        _field("Segment",   out.get("segment", "?"))
-        _field("Confidence",f"{out.get('confidence', 0):.0%}")
-        _field("AI maturity",f"{out.get('ai_maturity_score', '?')}/3")
-        _field("Send status",out.get("send_status", "?"))
-        _field("Total latency", f"{out.get('total_latency_ms', 0)}ms")
+        _field("Segment",      out.get("segment", "?"))
+        _field("Confidence",   f"{out.get('confidence', 0):.0%}")
+        _field("AI maturity",  f"{out.get('ai_maturity_score', '?')}/3")
+        _field("Send status",  out.get("send_status", "?"))
+        _field("Total latency",f"{out.get('total_latency_ms', 0)}ms")
         print()
-        print(f"  {'Span':<22}  {'Latency':>8}")
+        print(f"  {'Span':<24}  {'Latency':>8}  Key signals")
         _thin()
         for s in rec.get("spans", []):
-            print(f"  {s['name']:<22}  {s['latency_ms']:>6}ms")
+            md = s.get("metadata", {})
+            signal = ""
+            if s["name"] == "enrichment":
+                signal = (f"funding={md.get('funding_stage','?')}  "
+                          f"roles={md.get('open_roles','?')}  "
+                          f"ai={md.get('ai_maturity_score','?')}/3  "
+                          f"layoff={md.get('layoff_event','?')}")
+            elif s["name"] == "qualification":
+                signal = (f"segment={md.get('segment','?')}  "
+                          f"conf={float(md.get('confidence',0)):.0%}")
+            elif s["name"] == "email_composition":
+                signal = f"preview: {str(md.get('body_preview',''))[:60]}..."
+            elif s["name"] == "send_email":
+                signal = (f"mode={md.get('mode','?')}  "
+                          f"status={md.get('status','?')}  "
+                          f"id={md.get('resend_id') or 'n/a'}")
+            elif s["name"] == "hubspot_upsert":
+                signal = f"hs_id={md.get('hubspot_id','?')}"
+            print(f"  {s['name']:<24}  {s['latency_ms']:>6}ms  {signal}")
 
     print()
-    _ok("Traces also visible at cloud.langfuse.com (project: conversion-engine)")
+    _ok("Traces also visible at cloud.langfuse.com (project: my-tenacious-engine)")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

@@ -113,9 +113,26 @@ class ConversionEngine:
         logger.info(f"[{company_name}] Enrichment pipeline starting (async, 5 modules)...")
         with lf_trace.span("enrichment") as span:
             brief = self.enrichment.build_hiring_signal_brief(company_name, domain)
+            f  = brief.get("funding", {})
+            jv = brief.get("job_post_velocity", {})
+            lo = brief.get("layoffs", {})
+            ld = brief.get("leadership_change", {})
+            ai = brief.get("ai_maturity", {})
             span.set_metadata(
-                modules=brief.get("_module_latencies", {}),
-                source=brief.get("crunchbase_data", {}).get("_source", "?"),
+                funding_stage=f.get("stage", "unknown"),
+                funding_months_ago=f.get("last_funding_months"),
+                funding_confidence=f.get("confidence"),
+                layoff_event=lo.get("event") or "none",
+                layoff_confidence=lo.get("confidence"),
+                open_roles=jv.get("open_roles", 0),
+                velocity_delta=jv.get("velocity_delta"),
+                velocity_trend=jv.get("velocity_trend"),
+                velocity_confidence=jv.get("confidence"),
+                leadership_event=ld.get("event") or "none",
+                leadership_confidence=ld.get("confidence"),
+                ai_maturity_score=ai.get("score", 0),
+                ai_maturity_confidence=ai.get("confidence"),
+                module_latencies=brief.get("_module_latencies", {}),
             )
         trace["hiring_signal_brief"] = brief
         logger.info(
@@ -126,7 +143,12 @@ class ConversionEngine:
         logger.info(f"[{company_name}] Classifying ICP segment...")
         with lf_trace.span("qualification") as span:
             qual = classify(brief)
-            span.set_metadata(segment=qual["segment"], confidence=qual["confidence"])
+            span.set_metadata(
+                segment=qual["segment"],
+                confidence=qual["confidence"],
+                abstain_flag=qual.get("abstain_flag", False),
+                reasoning=qual.get("reasoning", ""),
+            )
         trace["qualification"] = qual
         segment = qual["segment"]
         confidence = qual["confidence"]
@@ -155,7 +177,13 @@ class ConversionEngine:
         logger.info(f"[{company_name}] Composing email (LLM={self.llm.is_available()})...")
         with lf_trace.span("email_composition") as span:
             email_draft = _do_compose()
-            span.set_metadata(llm_available=self.llm.is_available())
+            span.set_metadata(
+                llm_available=self.llm.is_available(),
+                segment=segment,
+                pitch_language=pitch_language(segment, ai_maturity.get("score", 0)),
+                booking_link=booking_link,
+                body_preview=email_draft[:200],
+            )
 
         # --- Step 4: Tone check + optional regenerate -----------------------
         with lf_trace.span("tone_check") as span:
@@ -205,6 +233,9 @@ class ConversionEngine:
             span.set_metadata(
                 mode=kill_switch.mode_label(),
                 status=send_result.get("status", "no_client"),
+                to=contact_email,
+                subject=email_data.get("subject", ""),
+                resend_id=send_result.get("resend_id"),
             )
         trace["send_result"] = send_result
 
