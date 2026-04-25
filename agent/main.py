@@ -531,17 +531,23 @@ class ConversionEngine:
             thread_id, new_segment, new_qual["confidence"], "engaged"
         )
 
-        # Update HubSpot
+        # Update HubSpot — mark warm + log reply note
         try:
             contact = self.hubspot.search_contact_by_email(contact_email)
             if contact:
-                self.hubspot.update_contact(
-                    contact["id"],
-                    outreach_status="warm",
-                    thread_status="engaged",
+                self.hubspot.update_contact(contact["id"], hs_lead_status="IN_PROGRESS")
+                signals_text = "\n".join(
+                    f"  {k}: {v}" for k, v in reply_signals.items()
+                ) if reply_signals else "  (none detected)"
+                self.hubspot.log_note(contact["id"],
+                    f"[Prospect replied — pipeline re-qualified]\n\n"
+                    f"Reply:\n  {reply_text[:400]}\n\n"
+                    f"Extracted signals:\n{signals_text}\n\n"
+                    f"New segment: {new_segment}  |  "
+                    f"Re-qualified: {new_segment != old_segment}"
                 )
         except Exception as e:
-            logger.error(f"HubSpot warm update failed: {e}")
+            logger.error(f"HubSpot reply update failed: {e}")
 
         return {
             "reply": reply,
@@ -583,15 +589,24 @@ class ConversionEngine:
             json.dumps(context_brief, indent=2, default=str), encoding="utf-8"
         )
 
-        # Update HubSpot
+        # Update HubSpot — mark as open deal + log full booking note
         try:
             contact = self.hubspot.search_contact_by_email(contact_email)
             if contact:
-                self.hubspot.update_contact(
-                    contact["id"],
-                    outreach_status="engaged",
-                    thread_status="discovery_call_booked",
-                    last_booked_call_at=datetime.utcnow().isoformat() + "Z",
+                self.hubspot.update_contact(contact["id"], hs_lead_status="OPEN_DEAL")
+                talking_pts = "\n".join(
+                    f"  {i+1}. {pt}"
+                    for i, pt in enumerate(context_brief.get("talking_points", []))
+                )
+                self.hubspot.log_note(contact["id"],
+                    f"[Discovery call booked via Cal.com]\n\n"
+                    f"Time      : {booking_data.get('start', '?')}\n"
+                    f"Attendee  : {booking_data.get('attendee_name', '?')} "
+                    f"({booking_data.get('attendee_title', '?')})\n"
+                    f"Segment   : {context_brief.get('segment', '?')}\n"
+                    f"AI maturity: {context_brief.get('ai_maturity', '?')}\n"
+                    f"Pitch     : {context_brief.get('pitch_angle', '?')}\n\n"
+                    f"Talking points:\n{talking_pts}"
                 )
         except Exception as e:
             logger.error(f"HubSpot booking update failed: {e}")
