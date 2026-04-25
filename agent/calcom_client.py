@@ -10,7 +10,7 @@ load_dotenv()
 
 class CalComClient:
     def __init__(self):
-        self.base_url = os.getenv("CALCOM_URL", "http://localhost:3000")
+        self.base_url = os.getenv("CALCOM_URL", "https://cal.com")
         self.event_type_id = os.getenv("CALCOM_EVENT_TYPE_ID", "1")
         self.api_key = os.getenv("CALCOM_API_KEY")
         self.timeout = int(os.getenv("CALCOM_TIMEOUT_SECONDS", "10"))
