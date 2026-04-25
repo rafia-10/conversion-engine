@@ -137,6 +137,8 @@ class ConversionEngine:
         )
 
         # --- Step 3: Compose email ------------------------------------------
+        booking_link = self.calcom.get_booking_link(contact_name, contact_email)
+
         def _do_compose(drift_examples=None):
             return compose_cold_email(
                 hiring_signal_brief=brief,
@@ -147,6 +149,7 @@ class ConversionEngine:
                 contact_title=contact_title,
                 llm=self.llm,
                 drift_examples=drift_examples,
+                booking_link=booking_link,
             )["body"]
 
         logger.info(f"[{company_name}] Composing email (LLM={self.llm.is_available()})...")
@@ -183,6 +186,7 @@ class ConversionEngine:
                 contact_name=contact_name,
                 contact_title=contact_title,
                 llm=self.llm,
+                booking_link=booking_link,
             )
             email_data["body"] = final_body
             span.set_metadata(bench_approved=email_data.get("bench_approved", True))

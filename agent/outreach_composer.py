@@ -38,6 +38,7 @@ def compose_cold_email(
     contact_title: str = "",
     llm: Optional[LLMClient] = None,
     drift_examples: Optional[List[str]] = None,
+    booking_link: Optional[str] = None,
 ) -> Dict:
     """
     Compose the first cold outreach email.
@@ -123,6 +124,10 @@ Return ONLY a JSON object:
     if not gate_result["approved"]:
         body = gate_result["rewritten"]
         logger.info(f"Bench gate rewrote body: {gate_result['blocked_claims']}")
+
+    # Inject Cal.com booking link before the signature
+    if booking_link:
+        body = _inject_booking_link(body, booking_link)
 
     html = _to_html(body)
     return {
@@ -264,6 +269,17 @@ def _segment_hook(segment, signals, funding, job_vel, leadership):
     if segment == "segment_4_capability_gaps":
         return f"AI maturity {signals.get('ai_maturity', 'score')} with specific capability signals"
     return "shows signals relevant to Tenacious's services"
+
+
+def _inject_booking_link(body: str, booking_link: str) -> str:
+    """Insert the Cal.com booking link on its own line before the closing signature."""
+    sig_markers = ["Alex\n", "Best,\n", "Thanks,\n", "Regards,\n"]
+    for marker in sig_markers:
+        idx = body.find(marker)
+        if idx != -1:
+            return body[:idx] + f"Book a 30-min discovery call: {booking_link}\n\n" + body[idx:]
+    # Fallback: append before last line
+    return body.rstrip() + f"\n\nBook a 30-min discovery call: {booking_link}"
 
 
 def _fallback_compose(company, contact_name, segment, signals, pitch):
