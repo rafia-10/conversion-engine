@@ -18,7 +18,7 @@ class AfricaTalkingClient:
             os.getenv("AFRICASTALK_API_KEY")
             or os.getenv("AFRICASTALK_KEY")
         )
-        self.sender = os.getenv("AFRICASTALK_SENDER", "Tenacious")
+        self.sender = os.getenv("AFRICASTALK_SENDER", "")  # leave blank unless registered in AT dashboard
         self.timeout = int(os.getenv("AFRICASTALK_TIMEOUT_SECONDS", "10"))
         self.hubspot = HubSpotClient()
         # Use sandbox endpoint when username is "sandbox"
