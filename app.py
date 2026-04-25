@@ -277,12 +277,22 @@ async def email_inbound(request: Request, background_tasks: BackgroundTasks):
                                    payload: JSON.stringify({from, subject, text})})
     """
     body = await request.body()
-    logger.info("Email inbound raw: %s", body[:400])
+    logger.info("Email inbound raw (content-type=%s): %s",
+                request.headers.get("content-type", "?"), body[:600])
 
+    # Try JSON first, then form-encoded — never return 4xx (Cloudmailin bounces on any error)
+    data: dict = {}
     try:
         data = json.loads(body)
     except Exception:
-        raise HTTPException(400, "invalid JSON")
+        try:
+            from urllib.parse import parse_qs
+            qs = parse_qs(body.decode("utf-8", errors="replace"))
+            data = {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
+            logger.info("Email inbound parsed as form-encoded: keys=%s", list(data.keys()))
+        except Exception as e:
+            logger.warning("Email inbound: could not parse body: %s", e)
+            return {"status": "skipped", "reason": "unparseable_body"}
 
     from_addr, reply_text, subject = _extract_inbound_fields(data)
 
