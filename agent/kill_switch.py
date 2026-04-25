@@ -60,7 +60,11 @@ def send_email(client, to: str, subject: str, html: str, text: str | None = None
 def send_sms(client, to: str, message: str, bypass_gate: bool = False) -> dict:
     """Wrapper: in sandbox mode, writes to sink instead of sending."""
     if IS_LIVE:
-        return client.send_sms(to=to, message=message, bypass_gate=bypass_gate)
+        raw = client.send_sms(to=to, message=message, bypass_gate=bypass_gate)
+        if raw.get("status") == "gate_blocked":
+            return raw
+        ok = raw.get("status_code", 0) < 400
+        return {"status": "sent" if ok else "send_error", "mode": "live", "to": to, "raw": raw}
 
     record = {
         "timestamp": datetime.utcnow().isoformat() + "Z",

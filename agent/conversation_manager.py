@@ -125,6 +125,11 @@ class ConversationManager:
             thread["metadata"]["booking_url"] = booking_url
         self._save_thread(thread)
 
+    def has_email_reply(self, contact_email: str) -> bool:
+        """Return True if the contact has sent at least one reply (role='prospect')."""
+        thread = self.get_thread(contact_email)
+        return any(m.get("role") == "prospect" for m in thread.get("messages", []))
+
     def list_threads(self) -> List[Dict]:
         threads = []
         for p in THREADS_DIR.glob("*.json"):

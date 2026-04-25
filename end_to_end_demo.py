@@ -577,29 +577,68 @@ def smsgate():
     _field("Reason",  cold_result.get("reason", ""))
 
     _section("Warm Contact  (Casey replied in the reply step)")
+    demo_phone = os.getenv("DEMO_SMS_PHONE", "+251912991622")
     warm_result = engine.send_sms_if_warm(
-        PROSPECT["contact_email"], "+254711234567", PROSPECT["contact_name"]
+        PROSPECT["contact_email"], demo_phone, PROSPECT["contact_name"]
     )
     status = warm_result.get("status", "?")
     color = "\033[32m" if status != "gate_blocked" else "\033[31m"
     _field("Contact",      PROSPECT["contact_email"])
+    _field("Phone",        demo_phone)
     _field("Status",       f"{color}{status}\033[0m")
     _field("Booking link", warm_result.get("booking_link", "n/a"))
-    if status != "gate_blocked":
+    if status == "gate_blocked":
+        _warn("Gate blocked -- run 'reply' step first to log a prospect message")
+    elif warm_result.get("mode") == "sandbox":
         _ok("Gate passed -- SMS intercepted -> outputs/sandbox_sink.jsonl")
     else:
-        _warn("Gate blocked -- run 'reply' step first to log a prospect message")
+        _ok(f"Gate passed -- SMS sent live to {demo_phone}")
+
+
+# ── LANGFUSE ──────────────────────────────────────────────────────────────────
+
+def langfuse_traces():
+    _banner("LANGFUSE", "Pipeline Observability -- Recent Traces")
+
+    log_path = OUTPUTS / "langfuse_traces.jsonl"
+    if not log_path.exists():
+        _warn("No traces yet — run 'outreach' first.")
+        return
+
+    lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    recent = [json.loads(l) for l in lines[-5:]]  # last 5 traces
+
+    print(f"\n  Showing last {len(recent)} trace(s) — full history: {log_path}\n")
+
+    for rec in recent:
+        _section(f"Trace: {rec['company']}  ({rec['contact_email']})")
+        _field("Trace ID",  rec.get("trace_id", "?"))
+        out = rec.get("output", {})
+        _field("Segment",   out.get("segment", "?"))
+        _field("Confidence",f"{out.get('confidence', 0):.0%}")
+        _field("AI maturity",f"{out.get('ai_maturity_score', '?')}/3")
+        _field("Send status",out.get("send_status", "?"))
+        _field("Total latency", f"{out.get('total_latency_ms', 0)}ms")
+        print()
+        print(f"  {'Span':<22}  {'Latency':>8}")
+        _thin()
+        for s in rec.get("spans", []):
+            print(f"  {s['name']:<22}  {s['latency_ms']:>6}ms")
+
+    print()
+    _ok("Traces also visible at cloud.langfuse.com (project: conversion-engine)")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 STEPS = {
-    "enrich":   (enrich,   "Enrichment -- hiring signal brief + competitor gap"),
-    "outreach": (outreach, "Full pipeline -- qualify + compose + send (sandbox)"),
-    "hubspot":  (hubspot,  "HubSpot contact record -- live fields"),
-    "reply":    (reply,    "Prospect reply -- re-qualification + booking link"),
-    "booking":  (booking,  "Cal.com booking confirmed -- context brief"),
-    "smsgate":  (smsgate,  "SMS warm-lead gate -- blocked vs allowed"),
+    "enrich":   (enrich,         "Enrichment -- hiring signal brief + competitor gap"),
+    "outreach": (outreach,       "Full pipeline -- qualify + compose + send"),
+    "hubspot":  (hubspot,        "HubSpot contact record -- live fields"),
+    "reply":    (reply,          "Prospect reply -- re-qualification + booking link"),
+    "booking":  (booking,        "Cal.com booking confirmed -- context brief"),
+    "smsgate":  (smsgate,        "SMS warm-lead gate -- blocked vs allowed"),
+    "langfuse": (langfuse_traces,"Langfuse traces -- pipeline observability"),
 }
 
 if __name__ == "__main__":
