@@ -45,7 +45,7 @@ from agent.enrichment import EnrichmentPipeline
 from agent.hubspot import HubSpotClient
 from agent.langfuse_client import tracing
 from agent.llm import LLMClient
-from agent.outreach_composer import compose_cold_email, compose_reply
+from agent.outreach_composer import compose_cold_email, compose_reply, _to_html
 from agent.qualifier import classify, pitch_language
 from agent.sms_handler import AfricaTalkingClient
 from agent.tone_checker import check_and_regenerate
@@ -219,6 +219,9 @@ class ConversionEngine:
                 hs_result = self.hubspot.upsert_enriched_contact(
                     email=contact_email,
                     firstname=contact_name if contact_name != "there" else None,
+                    company_name=company_name,
+                    contact_title=contact_title,
+                    domain=domain,
                     icp_segment=segment,
                     enrichment_signals=json.dumps(brief.get("ai_maturity", {})),
                     enrichment_timestamp=datetime.utcnow().isoformat() + "Z",
@@ -363,6 +366,60 @@ class ConversionEngine:
         return context_brief
 
     # -------------------------------------------------------------------------
+    # Outbound SMS (warm-lead gated)
+    # -------------------------------------------------------------------------
+
+    def send_sms_if_warm(
+        self,
+        contact_email: str,
+        phone: str,
+        contact_name: str = "there",
+    ) -> Dict:
+        """
+        Outbound SMS gated on the warm-lead check.
+
+        Gate: ConversationManager.has_email_reply(contact_email) must be True — the
+        contact must have sent at least one email reply before any SMS is dispatched.
+        Cold contacts always return gate_blocked; no SMS is ever sent to them.
+
+        When the gate passes, a Cal.com self-scheduling link (pre-filled with the
+        contact's details) is included in the message body.
+        """
+        if not self.conv_manager.has_email_reply(contact_email):
+            logger.info(
+                f"[SMS warm gate] BLOCKED {phone} — {contact_email} has no email reply on record"
+            )
+            return {
+                "status": "gate_blocked",
+                "reason": "no email reply on record",
+                "contact_email": contact_email,
+                "phone": phone,
+            }
+
+        booking_link = self.calcom.get_booking_link(
+            contact_name=contact_name,
+            contact_email=contact_email,
+        )
+        message = (
+            f"Hi {contact_name}, Tenacious here. "
+            f"Ready to book your 30-min discovery call? {booking_link}"
+        )
+
+        if not self.sms_client:
+            logger.warning("[SMS] Client unavailable — skipping send")
+            return {"status": "sms_client_unavailable", "booking_link": booking_link}
+
+        result = kill_switch.send_sms(
+            client=self.sms_client,
+            to=phone,
+            message=message,
+            bypass_gate=True,  # warm-lead gate already enforced above
+        )
+        logger.info(f"[SMS] Warm lead {contact_email} → {phone}: status={result.get('status')}")
+        result["booking_link"] = booking_link
+        return result
+
+    # -------------------------------------------------------------------------
     # Webhook handlers
     # -------------------------------------------------------------------------
 
@@ -433,6 +490,26 @@ class ConversionEngine:
             stage=stage,
             llm=self.llm,
         )
+
+        # Inject Cal.com self-scheduling link so the prospect can book directly
+        booking_link = self.calcom.get_booking_link(
+            contact_name="you",
+            contact_email=contact_email,
+        )
+        _SIG = "Tenacious Intelligence Corporation"
+        reply_body = reply["body"]
+        if _SIG in reply_body and booking_link not in reply_body:
+            idx = reply_body.index(_SIG)
+            block_start = reply_body.rfind("\n\n", 0, idx)
+            insert_at = block_start if block_start != -1 else max(0, idx - 1)
+            reply_body = (
+                reply_body[:insert_at]
+                + f"\n\nBook a 30-minute call: {booking_link}\n"
+                + reply_body[insert_at:]
+            )
+        reply["body"] = reply_body
+        reply["html"] = _to_html(reply_body)
+        reply["booking_link"] = booking_link
 
         # Send
         send_result = {}

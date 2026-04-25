@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
@@ -60,3 +61,28 @@ class CalComClient:
             "platform": "cal.com-local",
             "error": "unable to create booking with configured Cal.com endpoints",
         }
+
+    def get_booking_link(
+        self,
+        contact_name: str,
+        contact_email: str,
+        notes: str = "",
+    ) -> str:
+        """
+        Build a Cal.com self-scheduling URL pre-filled with the contact's details.
+        No API call — pure URL construction.
+
+        Env vars:
+            CALCOM_USERNAME   — Cal.com username / routing slug (default: "tenacious")
+            CALCOM_EVENT_SLUG — Event type slug (default: "discovery-call")
+
+        Returns a URL the prospect can click to book their own slot, e.g.:
+          http://localhost:3000/tenacious/discovery-call?name=Jordan&email=cto@co.com
+        """
+        username = os.getenv("CALCOM_USERNAME", "tenacious")
+        event_slug = os.getenv("CALCOM_EVENT_SLUG", "discovery-call")
+        base = f"{self.base_url.rstrip('/')}/{username}/{event_slug}"
+        params: dict = {"name": contact_name, "email": contact_email}
+        if notes:
+            params["notes"] = notes[:200]
+        return f"{base}?{urlencode(params)}"

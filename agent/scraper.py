@@ -89,6 +89,11 @@ class SignalScraper:
         Check robots.txt, then fetch page text if allowed.
         Returns page body text or None (on disallow, timeout, or error).
         """
+        import os as _os
+        if _os.getenv("DEMO_SKIP_PLAYWRIGHT"):
+            logger.debug(f"DEMO_SKIP_PLAYWRIGHT: skipping live fetch for {url}")
+            return None
+
         allowed, crawl_delay = _is_allowed(url)
         if not allowed:
             logger.info(f"robots.txt disallows {url} -- skipping")

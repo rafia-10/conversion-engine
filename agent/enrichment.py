@@ -408,8 +408,12 @@ class EnrichmentPipeline:
                     snapshot_date=snapshot_date,
                 )
             )
-            result["_latency_ms"] = int((time.time() - t0) * 1000)
-            return result
+            # Only keep the scraper result if it actually retrieved page data.
+            # source="none" means all career-page fetches failed; in that case
+            # fall through to the crunchbase record which has higher confidence.
+            if result.get("source") != "none" or not crunchbase_record:
+                result["_latency_ms"] = int((time.time() - t0) * 1000)
+                return result
         except Exception:
             pass
 
@@ -452,8 +456,12 @@ class EnrichmentPipeline:
             from agent.scraper import SignalScraper
             scraper = SignalScraper()
             result = scraper.run(scraper.scrape_leadership_changes(company_name, domain))
-            result["_latency_ms"] = int((time.time() - t0) * 1000)
-            return result
+            # Only keep the scraper result if it found a leadership event.
+            # event=None means the news search returned nothing; fall through
+            # to the crunchbase record which may have named AI/ML leadership.
+            if result.get("event") is not None or not crunchbase_record:
+                result["_latency_ms"] = int((time.time() - t0) * 1000)
+                return result
         except Exception:
             pass
 
