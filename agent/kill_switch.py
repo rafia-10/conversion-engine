@@ -34,7 +34,15 @@ def _write_sink(record: dict) -> None:
 def send_email(client, to: str, subject: str, html: str, text: str | None = None) -> dict:
     """Wrapper: in sandbox mode, writes to sink instead of sending."""
     if IS_LIVE:
-        return client.send_email(to=to, subject=subject, html=html, text=text)
+        raw = client.send_email(to=to, subject=subject, html=html, text=text)
+        ok = raw.get("status_code", 0) < 400
+        return {
+            "status": "sent" if ok else "send_error",
+            "mode": "live",
+            "to": to,
+            "resend_id": raw.get("response", {}).get("id"),
+            "status_code": raw.get("status_code"),
+        }
 
     record = {
         "timestamp": datetime.utcnow().isoformat() + "Z",

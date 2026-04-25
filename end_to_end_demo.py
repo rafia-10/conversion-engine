@@ -39,6 +39,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 OUTPUTS = Path("outputs")
 
 # Demo prospect: TalentBridge — Series A/3mo, hr tech, 8 roles +3 delta, 42% AI frac
@@ -62,6 +65,54 @@ PROSPECT_REPLY = (
 def _hr(n=68):    print("=" * n)
 def _thin(n=68):  print("-" * n)
 
+
+def _show_signal_brief(brief: dict) -> None:
+    """Print the 5-signal hiring brief with per-signal confidence scores."""
+    lats = brief.get("_module_latencies", {})
+    _section("Hiring Signal Brief  (5 parallel enrichment modules)")
+    print(f"  Latencies : crunchbase={lats.get('crunchbase_ms',0)}ms  "
+          f"layoffs={lats.get('layoffs_ms',0)}ms  "
+          f"job_velocity={lats.get('job_velocity_ms',0)}ms  "
+          f"leadership={lats.get('leadership_ms',0)}ms  "
+          f"ai_maturity={lats.get('ai_maturity_ms',0)}ms")
+    print()
+
+    # 1. Crunchbase funding
+    f = brief.get("funding", {})
+    print(f"  [1] Crunchbase funding    stage={f.get('stage','unknown')}  "
+          f"last={f.get('last_funding_months','?')}mo ago  "
+          f"confidence={f.get('confidence','?')}")
+
+    # 2. layoffs.fyi
+    lo = brief.get("layoffs", {})
+    lo_event = lo.get("event") or "none"
+    lo_pct   = f"{lo.get('percentage', 0):.0f}%  ({lo.get('headcount',0)} affected)" if lo.get("event") else "n/a"
+    print(f"  [2] layoffs.fyi           event={lo_event}  affected={lo_pct}  "
+          f"confidence={lo.get('confidence','?')}")
+
+    # 3. Job-post velocity
+    jv = brief.get("job_post_velocity", {})
+    delta = jv.get("velocity_delta")
+    delta_str = f"{delta:+d}" if delta is not None else "n/a"
+    print(f"  [3] job-post velocity     open_roles={jv.get('open_roles',0)}  "
+          f"60d_delta={delta_str}  trend={jv.get('velocity_trend','?')}  "
+          f"confidence={jv.get('confidence','?')}")
+
+    # 4. Leadership changes
+    ld = brief.get("leadership_change", {})
+    ld_event = ld.get("event") or "none"
+    print(f"  [4] leadership changes    event={ld_event}  "
+          f"confidence={ld.get('confidence','?')}")
+    if ld.get("headline"):
+        print(f"       headline : {ld['headline']}")
+
+    # 5. AI maturity score
+    ai = brief.get("ai_maturity", {})
+    print(f"  [5] AI maturity score     score={ai.get('score',0)}/3  "
+          f"confidence={ai.get('confidence','?')}")
+    for sig in ai.get("signal_summary", [])[:3]:
+        print(f"       * {sig}")
+
 def _section(title):
     print()
     _hr()
@@ -79,7 +130,8 @@ def _banner(step, desc):
     print()
     print(f"\033[1;34m{'='*68}\033[0m")
     print(f"\033[1;34m  {step} -- {desc}\033[0m")
-    print(f"\033[1;34m  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}  |  SANDBOX mode  |  debug -> outputs/demo_debug.log\033[0m")
+    _mode = os.getenv("KILL_SWITCH", "sandbox").upper()
+    print(f"\033[1;34m  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}  |  {_mode} mode  |  debug -> outputs/demo_debug.log\033[0m")
     print(f"\033[1;34m{'='*68}\033[0m")
 
 def _done(step):
@@ -209,7 +261,8 @@ def enrich():
 # ── OUTREACH ──────────────────────────────────────────────────────────────────
 
 def outreach():
-    _banner("OUTREACH", "Qualify -> Compose -> Tone Check -> Bench Gate -> Send (sandbox)")
+    _mode_label = os.getenv("KILL_SWITCH", "sandbox").upper()
+    _banner("OUTREACH", f"Qualify -> Compose -> Tone Check -> Bench Gate -> Send ({_mode_label})")
 
     from agent.main import ConversionEngine
     engine = ConversionEngine()
@@ -226,7 +279,9 @@ def outreach():
         domain=PROSPECT["domain"],
     )
 
-    _section("ICP Qualification")
+    _show_signal_brief(trace.get("hiring_signal_brief", {}))
+
+    _section("ICP Qualification  (segment scored against signal brief)")
     q = trace.get("qualification", {})
     _field("Segment",      q.get("segment", "?"))
     _field("Confidence",   f"{q.get('confidence', 0):.1%}")
@@ -250,12 +305,17 @@ def outreach():
     else:
         _warn("email_draft.txt not found")
 
-    _section("Send Result  (SANDBOX)")
+    _section(f"Send Result  ({_mode_label})")
     sr = trace.get("send_result", {})
     _field("Status", sr.get("status", "?"))
-    _field("Mode",   sr.get("mode", "sandbox"))
+    _field("Mode",   sr.get("mode", "?"))
     _field("To",     sr.get("to", "?"))
-    _ok("Intercepted -> outputs/sandbox_sink.jsonl  (no real email sent)")
+    if sr.get("resend_id"):
+        _field("Resend ID", sr["resend_id"])
+    if sr.get("mode") == "sandbox":
+        _ok("Intercepted -> outputs/sandbox_sink.jsonl  (no real email sent)")
+    else:
+        _ok(f"Email sent live via Resend  (reply_to: {os.getenv('RESEND_REPLY_TO', '?')})")
     print()
     _ok(f"Total latency : {trace.get('latency_ms',0)}ms")
     _ok(f"Output dir    : {trace.get('output_dir','?')}")
