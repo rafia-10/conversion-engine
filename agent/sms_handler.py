@@ -98,7 +98,11 @@ class AfricaTalkingClient:
         response = requests.post(
             self.base_url,
             data=payload,
-            headers={"apiKey": self.api_key, "Content-Type": "application/x-www-form-urlencoded"},
+            headers={
+                "apiKey": self.api_key,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
             timeout=self.timeout,
         )
 
