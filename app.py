@@ -149,7 +149,8 @@ def _extract_inbound_fields(data: dict) -> tuple[str, str, str]:
     """
     # ── from address ──────────────────────────────────────────────────
     from_addr = (
-        _parse_email_address(data.get("envelope", {}).get("from"))   # Cloudmailin
+        _parse_email_address(data.get("envelope", {}).get("from"))   # JSON normalised
+        or _parse_email_address(data.get("envelope[from]", ""))      # multipart flat key
         or _parse_email_address(data.get("from", ""))                # Apps Script / generic
     )
 
@@ -160,11 +161,16 @@ def _extract_inbound_fields(data: dict) -> tuple[str, str, str]:
         or data.get("text")              # Apps Script / generic
         or data.get("body")              # alternative key
         or ""
-    ).strip()
+    )
+    if hasattr(reply_text, "read"):      # UploadFile from multipart
+        import asyncio
+        reply_text = asyncio.get_event_loop().run_until_complete(reply_text.read()).decode("utf-8", errors="replace")
+    reply_text = (reply_text or "").strip()
 
     # ── subject ───────────────────────────────────────────────────────
     subject = (
-        data.get("headers", {}).get("Subject")   # Cloudmailin headers object
+        data.get("headers", {}).get("Subject")   # JSON normalised: headers object
+        or data.get("headers[Subject]", "")      # multipart flat key
         or data.get("subject")                    # Apps Script / generic
         or ""
     )
@@ -280,19 +286,30 @@ async def email_inbound(request: Request, background_tasks: BackgroundTasks):
     logger.info("Email inbound raw (content-type=%s): %s",
                 request.headers.get("content-type", "?"), body[:600])
 
-    # Try JSON first, then form-encoded — never return 4xx (Cloudmailin bounces on any error)
+    # Try JSON → URL-encoded → multipart — never return 4xx (Cloudmailin bounces on any error)
+    content_type = request.headers.get("content-type", "")
     data: dict = {}
     try:
         data = json.loads(body)
+        logger.info("Email inbound: parsed as JSON, keys=%s", list(data.keys()))
     except Exception:
-        try:
-            from urllib.parse import parse_qs
-            qs = parse_qs(body.decode("utf-8", errors="replace"))
-            data = {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
-            logger.info("Email inbound parsed as form-encoded: keys=%s", list(data.keys()))
-        except Exception as e:
-            logger.warning("Email inbound: could not parse body: %s", e)
-            return {"status": "skipped", "reason": "unparseable_body"}
+        if "multipart/form-data" in content_type:
+            try:
+                form = await request.form()
+                data = dict(form)
+                logger.info("Email inbound: parsed as multipart, keys=%s", list(data.keys()))
+            except Exception as e:
+                logger.warning("Email inbound: multipart parse failed: %s", e)
+                return {"status": "skipped", "reason": "multipart_parse_failed"}
+        else:
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(body.decode("utf-8", errors="replace"))
+                data = {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
+                logger.info("Email inbound: parsed as url-encoded, keys=%s", list(data.keys()))
+            except Exception as e:
+                logger.warning("Email inbound: could not parse body (ct=%s): %s", content_type, e)
+                return {"status": "skipped", "reason": "unparseable_body"}
 
     from_addr, reply_text, subject = _extract_inbound_fields(data)
 
