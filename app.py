@@ -38,6 +38,7 @@ os.environ.setdefault("DEMO_SKIP_PLAYWRIGHT", "1")
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 import agent.sms_router  # noqa: F401 — registers sms_reply event handlers
 from agent.events import events
@@ -517,3 +518,87 @@ async def debug_inbound(request: Request):
         data = body.decode("utf-8", errors="replace")
     logger.info("DEBUG inbound payload: %s", str(data)[:2000])
     return {"received": data}
+
+
+# ── Dashboard API ────────────────────────────────────────────────────────────
+
+@app.get("/api/dashboard")
+async def get_dashboard_stats():
+    """Return stats and recent traces for the dashboard."""
+    trace_path = os.path.join(os.getenv("OUTPUTS_DIR", "outputs"), "traces.jsonl")
+    traces = []
+    if os.path.exists(trace_path):
+        try:
+            with open(trace_path, "r", encoding="utf-8") as f:
+                content = f.readlines()
+                # Tail last 20
+                for line in content[-20:]:
+                    try:
+                        traces.append(json.loads(line))
+                    except:
+                        continue
+        except Exception as e:
+            logger.warning("Failed to read traces: %s", e)
+
+    # Sandbox sink tail
+    sink_path = os.path.join(os.getenv("OUTPUTS_DIR", "outputs"), "sandbox_sink.jsonl")
+    sends = []
+    if os.path.exists(sink_path):
+        try:
+            with open(sink_path, "r", encoding="utf-8") as f:
+                content = f.readlines()
+                for line in content[-10:]:
+                    try:
+                        sends.append(json.loads(line))
+                    except:
+                        continue
+        except Exception as e:
+            logger.warning("Failed to read sink: %s", e)
+
+    return {
+        "status": "online",
+        "mode": os.getenv("KILL_SWITCH", "sandbox"),
+        "traces": traces[::-1],  # newest first
+        "sends": sends[::-1],
+        "stats": {
+            "total_traces": len(traces),
+            "total_sends": len(sends)
+        }
+    }
+
+
+@app.post("/api/trigger-test")
+async def trigger_test_run(request: Request, background_tasks: BackgroundTasks):
+    """Trigger a prospect run manually."""
+    try:
+        data = await request.json()
+    except:
+        # Default to a synthetic prospect if no data
+        data = {
+            "company_name": "TestCorp",
+            "contact_email": "test@example.com",
+            "contact_name": "Test User"
+        }
+
+    def _task():
+        try:
+            engine = _get_engine()
+            engine.process_prospect(
+                company_name=data.get("company_name", "TestCorp"),
+                contact_email=data.get("contact_email", "test@example.com"),
+                contact_name=data.get("contact_name", "there"),
+                contact_title=data.get("contact_title", ""),
+                domain=data.get("domain")
+            )
+        except Exception as e:
+            logger.error("Manual trigger failed: %s", e)
+
+    background_tasks.add_task(_task)
+    return {"status": "enqueued", "data": data}
+
+
+# ── Static Files ─────────────────────────────────────────────────────────────
+
+# Mount the dashboard directory
+if os.path.exists("dashboard"):
+    app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")

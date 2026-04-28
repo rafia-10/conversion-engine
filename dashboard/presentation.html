@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tenacious Conversion Engine — 3-Min Pitch</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg:      #0d1117;
+    --surface: #161b22;
+    --border:  #30363d;
+    --green:   #3fb950;
+    --green2:  #238636;
+    --blue:    #58a6ff;
+    --purple:  #bc8cff;
+    --orange:  #f0883e;
+    --red:     #f85149;
+    --muted:   #8b949e;
+    --text:    #e6edf3;
+    --white:   #ffffff;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── NAV BAR ── */
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .nav-brand { font-size: 13px; color: var(--muted); letter-spacing: .5px; }
+  .nav-dots  { display: flex; gap: 8px; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border); cursor: pointer; transition: background .2s;
+  }
+  .dot.active { background: var(--green); }
+  .nav-counter { font-size: 13px; color: var(--muted); }
+
+  /* ── SLIDES WRAPPER ── */
+  .deck {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .slide {
+    position: absolute; inset: 0;
+    padding: 48px 72px;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    animation: fadeIn .25s ease;
+  }
+  .slide.active { display: flex; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* ── FOOTER ── */
+  .footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .footer-hint { font-size: 12px; color: var(--muted); }
+  .footer-btns { display: flex; gap: 10px; }
+  .btn {
+    padding: 6px 18px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); cursor: pointer;
+    font-size: 13px; transition: background .15s, border-color .15s;
+  }
+  .btn:hover { background: var(--border); }
+  .btn-primary { background: var(--green2); border-color: var(--green); color: var(--white); }
+  .btn-primary:hover { background: var(--green); }
+
+  /* ── SHARED TYPOGRAPHY ── */
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--green); margin-bottom: 12px;
+  }
+  h1 { font-size: 52px; font-weight: 800; line-height: 1.1; color: var(--white); }
+  h2 { font-size: 36px; font-weight: 700; line-height: 1.2; color: var(--white); margin-bottom: 28px; }
+  h3 { font-size: 18px; font-weight: 600; color: var(--white); margin-bottom: 6px; }
+  p  { font-size: 16px; line-height: 1.6; color: var(--muted); }
+  .accent { color: var(--green); }
+  .blue   { color: var(--blue); }
+  .purple { color: var(--purple); }
+  .orange { color: var(--orange); }
+  .red    { color: var(--red); }
+
+  /* ── CARD ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+  }
+  .card-green  { border-color: var(--green2); }
+  .card-blue   { border-color: #1f6feb; }
+  .card-purple { border-color: #6e40c9; }
+  .card-orange { border-color: #9e4a00; }
+
+  /* ── SLIDE 1: TITLE ── */
+  .slide-1 { background: radial-gradient(ellipse at 30% 50%, #0d2a0d 0%, var(--bg) 60%); }
+  .slide-1 h1 { margin-bottom: 16px; }
+  .slide-1 .sub {
+    font-size: 20px; color: var(--muted); max-width: 620px; line-height: 1.5;
+    margin-bottom: 40px;
+  }
+  .badge-row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .badge {
+    padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+    border: 1px solid;
+  }
+  .badge-green  { background: #0d2a0d; border-color: var(--green);  color: var(--green);  }
+  .badge-blue   { background: #0d1e3d; border-color: var(--blue);   color: var(--blue);   }
+  .badge-purple { background: #1e0d3d; border-color: var(--purple); color: var(--purple); }
+  .badge-orange { background: #2d1900; border-color: var(--orange); color: var(--orange); }
+
+  /* ── SLIDE 2: PROBLEM ── */
+  .problem-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 8px;
+  }
+  .stat-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px 28px;
+  }
+  .stat-num { font-size: 42px; font-weight: 800; color: var(--red); line-height: 1; }
+  .stat-label { font-size: 14px; color: var(--muted); margin-top: 6px; }
+  .stat-box.green .stat-num { color: var(--green); }
+  .stat-box.blue  .stat-num { color: var(--blue); }
+  .stat-box.orange .stat-num { color: var(--orange); }
+
+  /* ── SLIDE 3: PIPELINE ── */
+  .pipeline {
+    display: flex; align-items: center; gap: 0; width: 100%; margin-bottom: 28px;
+  }
+  .pipe-step {
+    flex: 1; text-align: center; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 8px;
+    position: relative;
+  }
+  .pipe-icon { font-size: 22px; margin-bottom: 6px; }
+  .pipe-name { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: var(--white); }
+  .pipe-sub  { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .pipe-arrow {
+    width: 28px; flex-shrink: 0; text-align: center;
+    color: var(--border); font-size: 18px;
+  }
+  .pipe-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .pipe-detail { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .pipe-detail strong { color: var(--text); }
+
+  /* ── SLIDE 4: INNOVATION ── */
+  .gate-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 8px;
+  }
+  .gate-row {
+    display: flex; align-items: flex-start; gap: 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px;
+  }
+  .gate-badge {
+    min-width: 72px; padding: 4px 0; border-radius: 6px; text-align: center;
+    font-size: 11px; font-weight: 700; letter-spacing: .5px; flex-shrink: 0;
+  }
+  .gate-high   { background: #0d2a0d; color: var(--green);  border: 1px solid var(--green2); }
+  .gate-medium { background: #0d1e3d; color: var(--blue);   border: 1px solid #1f6feb; }
+  .gate-low    { background: #1e0d3d; color: var(--purple); border: 1px solid #6e40c9; }
+  .gate-none   { background: #2d1900; color: var(--orange); border: 1px solid #9e4a00; }
+  .gate-text   { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .gate-text em { font-style: normal; color: var(--text); }
+
+  .ablation-bar { margin-top: 24px; }
+  .bar-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .bar-label { font-size: 13px; color: var(--muted); width: 150px; flex-shrink: 0; }
+  .bar-track { flex: 1; background: var(--border); border-radius: 4px; height: 20px; overflow: hidden; }
+  .bar-fill  { height: 100%; border-radius: 4px; display: flex; align-items: center;
+               padding-left: 10px; font-size: 12px; font-weight: 700; color: var(--white); }
+  .bar-red    { background: var(--red); }
+  .bar-orange { background: var(--orange); }
+  .bar-green  { background: var(--green); }
+
+  /* ── SLIDE 5: SYSTEM ── */
+  .integration-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+  }
+  .int-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 20px;
+  }
+  .int-icon  { font-size: 24px; margin-bottom: 10px; }
+  .int-name  { font-size: 14px; font-weight: 700; color: var(--white); margin-bottom: 4px; }
+  .int-desc  { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  /* ── SLIDE 6: RESULTS ── */
+  .results-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;
+  }
+  .result-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px 26px;
+  }
+  .result-num  { font-size: 48px; font-weight: 800; line-height: 1; }
+  .result-unit { font-size: 18px; font-weight: 600; }
+  .result-desc { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .proof-row   { display: flex; gap: 14px; flex-wrap: wrap; }
+  .proof-chip  {
+    padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    background: var(--surface); border: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <span class="nav-brand">TENACIOUS INTELLIGENCE CORPORATION</span>
+  <div class="nav-dots" id="dots"></div>
+  <span class="nav-counter" id="counter">1 / 6</span>
+</div>
+
+<div class="deck" id="deck">
+
+  <!-- ══════════════════════════════════════════
+       SLIDE 1 — TITLE
+  ══════════════════════════════════════════ -->
+  <div class="slide slide-1 active" data-slide="1">
+    <div class="eyebrow">Conversion Engine — Act IV</div>
+    <h1>AI-Powered<br/><span class="accent">Outbound Sales</span><br/>Automation</h1>
+    <p class="sub">
+      A fully autonomous B2B prospecting system — from raw company name to booked discovery call —
+      built on a deterministic confidence gate that eliminates ungrounded claims.
+    </p>
+    <div class="badge-row">
+      <span class="badge badge-green">5 Signal Modules</span>
+      <span class="badge badge-blue">4 ICP Segments</span>
+      <span class="badge badge-purple">DeepSeek V3 Backbone</span>
+      <span class="badge badge-orange">0.80 pass@1</span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SLIDE 2 — THE PROBLEM
+  ══════════════════════════════════════════ -->
+  <div class="slide" data-slide="2">
+    <div class="eyebrow">The Problem</div>
+    <h2>Cold Outreach is Broken<br/>by <span class="red">Ungrounded Claims</span></h2>
+    <div class="problem-grid">
+      <div class="stat-box">
+        <div class="stat-num">35%</div>
+        <div class="stat-label">Signal over-claiming rate in baseline outreach — asserting facts the data doesn't support</div>
+      </div>
+      <div class="stat-box orange">
+        <div class="stat-num" style="color:var(--orange)">$3.2M–$7.2M</div>
+        <div class="stat-label">Estimated annual opportunity cost from trust-destroying emails</div>
+      </div>
+      <div class="stat-box blue">
+        <div class="stat-num" style="color:var(--blue)">Manual</div>
+        <div class="stat-label">Existing approach requires an SDR to manually research, write, and CRM-sync every prospect</div>
+      </div>
+      <div class="stat-box green">
+        <div class="stat-num" style="color:var(--green)">End-to-end</div>
+        <div class="stat-label">Our solution automates enrichment → qualification → composition → delivery → reply handling</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SLIDE 3 — PIPELINE ARCHITECTURE
+  ══════════════════════════════════════════ -->
+  <div class="slide" data-slide="3">
+    <div class="eyebrow">Architecture</div>
+    <h2>The <span class="accent">6-Stage</span> Pipeline</h2>
+    <div class="pipeline">
+      <div class="pipe-step" style="border-color:var(--green2)">
+        <div class="pipe-icon">🔍</div>
+        <div class="pipe-name">ENRICH</div>
+        <div class="pipe-sub">5 parallel modules</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" style="border-color:#1f6feb">
+        <div class="pipe-icon">🎯</div>
+        <div class="pipe-name">QUALIFY</div>
+        <div class="pipe-sub">ICP segment match</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" style="border-color:#6e40c9">
+        <div class="pipe-icon">✍️</div>
+        <div class="pipe-name">COMPOSE</div>
+        <div class="pipe-sub">LLM + confidence gate</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" style="border-color:#9e4a00">
+        <div class="pipe-icon">🎨</div>
+        <div class="pipe-name">TONE CHECK</div>
+        <div class="pipe-sub">Style guide enforcer</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" style="border-color:#6e0d0d">
+        <div class="pipe-icon">🔒</div>
+        <div class="pipe-name">GATE</div>
+        <div class="pipe-sub">Kill switch + bench</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" style="border-color:var(--green2)">
+        <div class="pipe-icon">📤</div>
+        <div class="pipe-name">SEND + CRM</div>
+        <div class="pipe-sub">Resend + HubSpot</div>
+      </div>
+    </div>
+    <div class="pipe-row">
+      <div class="card card-green">
+        <h3 style="font-size:14px; margin-bottom:8px;">🔍 Enrichment</h3>
+        <p class="pipe-detail">
+          <strong>5 async modules</strong> run concurrently:<br/>
+          Crunchbase (funding, headcount, AI stack) · Layoffs.fyi · Job velocity via Playwright scrape · Leadership changes from Google News · AI maturity score (0–3) from 6 weighted indicators
+        </p>
+      </div>
+      <div class="card card-blue">
+        <h3 style="font-size:14px; margin-bottom:8px;">🎯 Qualification</h3>
+        <p class="pipe-detail">
+          <strong>Priority-ordered rules</strong> against 4 ICP segments:<br/>
+          Seg 1 Series A/B · Seg 2 Mid-market restructuring · Seg 3 Leadership transitions · Seg 4 Capability gaps · ABSTAIN if confidence &lt; 0.6
+        </p>
+      </div>
+      <div class="card card-purple">
+        <h3 style="font-size:14px; margin-bottom:8px;">✍️ Compose + Gate</h3>
+        <p class="pipe-detail">
+          <strong>Confidence gate</strong> pre-processes every signal before the LLM sees it. Bench gate checks staffing claims against 36 real engineers. Tone checker enforces 5 style markers with up to 2 regenerations.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SLIDE 4 — THE CORE INNOVATION
+  ══════════════════════════════════════════ -->
+  <div class="slide" data-slide="4">
+    <div class="eyebrow">Core Innovation — Act IV Mechanism</div>
+    <h2>The <span class="accent">Deterministic</span> Confidence Gate</h2>
+    <p style="margin-bottom:20px; font-size:15px;">
+      Every signal is classified <strong style="color:var(--text)">in code</strong> before the LLM prompt is assembled.
+      The model can only generate text around pre-hedged claims — it cannot assert what the data doesn't support.
+    </p>
+    <div class="gate-grid">
+      <div class="gate-row">
+        <div class="gate-badge gate-high">HIGH</div>
+        <div class="gate-text"><em>Assertive:</em> "You closed a $14M Series B six months ago — you're scaling."</div>
+      </div>
+      <div class="gate-row">
+        <div class="gate-badge gate-medium">MEDIUM</div>
+        <div class="gate-text"><em>Hedged:</em> "We see signals of a recent funding event at your company."</div>
+      </div>
+      <div class="gate-row">
+        <div class="gate-badge gate-low">LOW</div>
+        <div class="gate-text"><em>Question-framed:</em> "Has there been a recent funding event we should know about?"</div>
+      </div>
+      <div class="gate-row">
+        <div class="gate-badge gate-none">ABSENT</div>
+        <div class="gate-text"><em>Omitted entirely:</em> Signal never appears in the email — no hallucination possible.</div>
+      </div>
+    </div>
+
+    <div class="ablation-bar">
+      <div style="font-size:12px; color:var(--muted); margin-bottom:10px; letter-spacing:.5px; text-transform:uppercase; font-weight:600;">Ablation Results — pass@1</div>
+      <div class="bar-row">
+        <div class="bar-label">Baseline (no gate)</div>
+        <div class="bar-track"><div class="bar-fill bar-red" style="width:60%">0.60</div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Prompt-only hedging</div>
+        <div class="bar-track"><div class="bar-fill bar-orange" style="width:67%">0.67</div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Deterministic gate ✓</div>
+        <div class="bar-track"><div class="bar-fill bar-green" style="width:80%">0.80 ▲ +20pp</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SLIDE 5 — INTEGRATIONS & SYSTEM
+  ══════════════════════════════════════════ -->
+  <div class="slide" data-slide="5">
+    <div class="eyebrow">Full-Stack System</div>
+    <h2>Integrations &amp; <span class="accent">Infrastructure</span></h2>
+    <div class="integration-grid">
+      <div class="int-card" style="border-color:var(--green2)">
+        <div class="int-icon">🧠</div>
+        <div class="int-name">DeepSeek V3 via OpenRouter</div>
+        <div class="int-desc">Backbone LLM for email composition, tone scoring, and reply generation. JSON-mode output with rule-based fallback.</div>
+      </div>
+      <div class="int-card" style="border-color:#1f6feb">
+        <div class="int-icon">📧</div>
+        <div class="int-name">Resend + Cloudmailin</div>
+        <div class="int-desc">Transactional email delivery. Inbound reply forwarding via webhook. Bounce events auto-mark HubSpot UNQUALIFIED.</div>
+      </div>
+      <div class="int-card" style="border-color:#9e4a00">
+        <div class="int-icon">📱</div>
+        <div class="int-name">Africa's Talking SMS</div>
+        <div class="int-desc">Warm-lead gate enforced: SMS only dispatched after an email reply is on record. Inbound classified as confirm/cancel/question.</div>
+      </div>
+      <div class="int-card" style="border-color:#6e40c9">
+        <div class="int-icon">🗂️</div>
+        <div class="int-name">HubSpot CRM</div>
+        <div class="int-desc">Search-or-create on every prospect. ICP segment → hs_lead_status. Full enrichment detail written as timeline notes.</div>
+      </div>
+      <div class="int-card" style="border-color:var(--green2)">
+        <div class="int-icon">📅</div>
+        <div class="int-name">Cal.com</div>
+        <div class="int-desc">Booking link injected into every email. BOOKING_CREATED webhook marks thread booked, generates discovery-call context brief.</div>
+      </div>
+      <div class="int-card" style="border-color:#1f6feb">
+        <div class="int-icon">📊</div>
+        <div class="int-name">Langfuse Observability</div>
+        <div class="int-desc">Per-step named spans with latency and LLM I/O. Local JSONL fallback always active. Cloud flush when keys present.</div>
+      </div>
+    </div>
+    <p style="margin-top:16px; font-size:13px;">
+      <span style="color:var(--text); font-weight:600;">Deployment:</span> FastAPI webhook gateway on Render · <span style="color:var(--text); font-weight:600;">Safety:</span> SANDBOX mode by default — all outbound intercepted to <code style="font-size:12px; color:var(--green)">sandbox_sink.jsonl</code> until <code style="font-size:12px; color:var(--green)">KILL_SWITCH=live</code>
+    </p>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SLIDE 6 — RESULTS & PROOF
+  ══════════════════════════════════════════ -->
+  <div class="slide" data-slide="6">
+    <div class="eyebrow">Results &amp; Proof</div>
+    <h2>What We <span class="accent">Demonstrated</span></h2>
+    <div class="results-grid">
+      <div class="result-card" style="border-color:var(--green2)">
+        <div class="result-num accent">0.80 <span class="result-unit">pass@1</span></div>
+        <div class="result-desc">tau2-Bench retail evaluation · 30 tasks · 5 trials each · CI = [0.62, 0.91] · p = 0.028 vs baseline</div>
+      </div>
+      <div class="result-card" style="border-color:#1f6feb">
+        <div class="result-num blue">+20<span class="result-unit">pp</span></div>
+        <div class="result-desc">Lift over no-gate baseline (0.60 → 0.80) · Non-overlapping Wilson 95% CIs · Statistically significant</div>
+      </div>
+      <div class="result-card" style="border-color:#6e40c9">
+        <div class="result-num purple">34 <span class="result-unit">probes</span></div>
+        <div class="result-desc">Adversarial test suite across 10 categories: ICP misclassification, over-claiming, bench over-commitment, tone drift, thread leakage</div>
+      </div>
+      <div class="result-card" style="border-color:#9e4a00">
+        <div class="result-num orange">$0.008 <span class="result-unit">/run</span></div>
+        <div class="result-desc">Full pipeline cost per prospect at DeepSeek V3 pricing · End-to-end: enrich → qualify → compose → send → CRM sync</div>
+      </div>
+    </div>
+    <div style="margin-top: 4px;">
+      <div style="font-size:12px; color:var(--muted); letter-spacing:.5px; text-transform:uppercase; font-weight:600; margin-bottom:10px;">System Capabilities Delivered</div>
+      <div class="proof-row">
+        <span class="proof-chip" style="color:var(--green)">✓ 5-module async enrichment</span>
+        <span class="proof-chip" style="color:var(--green)">✓ 4-segment ICP classifier</span>
+        <span class="proof-chip" style="color:var(--green)">✓ Confidence-gated composer</span>
+        <span class="proof-chip" style="color:var(--green)">✓ Bench capacity enforcer</span>
+        <span class="proof-chip" style="color:var(--green)">✓ Inbound reply handler</span>
+        <span class="proof-chip" style="color:var(--green)">✓ Booking + CRM sync</span>
+        <span class="proof-chip" style="color:var(--green)">✓ Warm-lead SMS gate</span>
+        <span class="proof-chip" style="color:var(--green)">✓ Langfuse observability</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- end deck -->
+
+<div class="footer">
+  <span class="footer-hint">← → arrow keys &nbsp;|&nbsp; click dots to jump</span>
+  <div class="footer-btns">
+    <button class="btn" onclick="prev()">← Prev</button>
+    <button class="btn btn-primary" onclick="next()">Next →</button>
+  </div>
+</div>
+
+<script>
+  const TOTAL = 6;
+  let current = 1;
+
+  const deck    = document.getElementById('deck');
+  const counter = document.getElementById('counter');
+  const dotsEl  = document.getElementById('dots');
+
+  // Build dots
+  for (let i = 1; i <= TOTAL; i++) {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === 1 ? ' active' : '');
+    d.onclick = () => goto(i);
+    dotsEl.appendChild(d);
+  }
+
+  function goto(n) {
+    if (n < 1 || n > TOTAL) return;
+    document.querySelector('.slide.active')?.classList.remove('active');
+    document.querySelector(`[data-slide="${n}"]`)?.classList.add('active');
+    document.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('active', i + 1 === n));
+    counter.textContent = `${n} / ${TOTAL}`;
+    current = n;
+  }
+
+  function next() { goto(current + 1); }
+  function prev() { goto(current - 1); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown'  || e.key === ' ') { e.preventDefault(); next(); }
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                     { e.preventDefault(); prev(); }
+  });
+</script>
+</body>
+</html>

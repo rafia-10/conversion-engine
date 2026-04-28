@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tenacious Conversion Engine | Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #030712;
+            --card-bg: rgba(17, 24, 39, 0.7);
+            --border: rgba(255, 255, 255, 0.1);
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+            --glass-blur: blur(12px);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(34, 197, 94, 0.05) 0%, transparent 40%);
+            min-height: 100vh;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: rgba(17, 24, 39, 0.8);
+            border-right: 1px solid var(--border);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            backdrop-filter: var(--glass-blur);
+        }
+
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--primary), #8b5cf6);
+            border-radius: 8px;
+        }
+
+        .nav {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .nav-item {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+        }
+
+        .stats-sidebar {
+            margin-top: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .stat-small {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 1rem;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-small-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-small-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-top: 0.25rem;
+        }
+
+        /* Main Content */
+        .main {
+            padding: 2rem 3rem;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .badge-mode {
+            padding: 0.4rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            border: 1px solid currentColor;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .badge-mode.sandbox { color: var(--warning); background: rgba(245, 158, 11, 0.1); }
+        .badge-mode.live { color: var(--success); background: rgba(34, 197, 94, 0.1); }
+
+        .btn-trigger {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .btn-trigger:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .grid-dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 2rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 1.5rem;
+            backdrop-filter: var(--glass-blur);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        /* Feed Elements */
+        .feed {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .feed-item {
+            padding: 1rem;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            transition: transform 0.2s;
+        }
+
+        .feed-item:hover {
+            transform: scale(1.01);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .feed-item-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .company-name { font-weight: 600; color: var(--primary); }
+        .timestamp { color: var(--text-muted); font-size: 0.75rem; }
+
+        .segment-tag {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            margin-left: 0.5rem;
+        }
+
+        .trace-summary {
+            font-size: 0.9rem;
+            color: var(--text-main);
+            margin-top: 0.5rem;
+            line-height: 1.4;
+        }
+
+        /* Code highlight for mono data */
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            background: rgba(0,0,0,0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-fade {
+            animation: fadeIn 0.4s ease-out forwards;
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon"></div>
+                Tenacious Engine
+            </div>
+            <nav class="nav">
+                <a class="nav-item active">Overview</a>
+                <a class="nav-item">Prospects</a>
+                <a class="nav-item">Outreach Sink</a>
+                <a class="nav-item">Configuration</a>
+            </nav>
+            <div class="stats-sidebar">
+                <div class="stat-small">
+                    <div class="stat-small-label">Active Traces</div>
+                    <div class="stat-small-value" id="stat-traces">0</div>
+                </div>
+                <div class="stat-small">
+                    <div class="stat-small-label">Outbound Sent</div>
+                    <div class="stat-small-value" id="stat-sends">0</div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header>
+                <div>
+                    <h1>Engine Dashboard</h1>
+                    <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem;">Real-time outreach signal monitoring</p>
+                </div>
+                <div style="display: flex; gap: 1rem; align-items: center;">
+                    <div id="mode-badge" class="badge-mode sandbox">
+                        <span style="width: 8px; height: 8px; background: currentColor; border-radius: 50%;"></span>
+                        Sandbox Mode
+                    </div>
+                    <button class="btn-trigger" onclick="triggerTest()">Trigger Prospect</button>
+                </div>
+            </header>
+
+            <div class="grid-dashboard">
+                <!-- Activity Feed -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Recent Pipeline Traces</h2>
+                        <span style="font-size: 0.75rem; color: var(--text-muted)">Live Updates</span>
+                    </div>
+                    <div id="trace-feed" class="feed">
+                        <div style="color: var(--text-muted); text-align: center; padding: 2rem;">Loading traces...</div>
+                    </div>
+                </section>
+
+                <!-- Outreach Sink -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Outbound Sink (Sandbox)</h2>
+                        <span style="font-size: 0.75rem; color: var(--text-muted)">Intercepted</span>
+                    </div>
+                    <div id="send-feed" class="feed">
+                        <div style="color: var(--text-muted); text-align: center; padding: 2rem;">No sends recorded.</div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/dashboard');
+                const data = await res.json();
+                
+                // Update Badge
+                const badge = document.getElementById('mode-badge');
+                badge.className = `badge-mode ${data.mode}`;
+                badge.innerHTML = `<span style="width: 8px; height: 8px; background: currentColor; border-radius: 50%;"></span>${data.mode[0].toUpperCase() + data.mode.slice(1)} Mode`;
+
+                // Update Stats
+                document.getElementById('stat-traces').innerText = data.stats.total_traces;
+                document.getElementById('stat-sends').innerText = data.stats.total_sends;
+
+                // Update Feeds
+                renderTraces(data.traces);
+                renderSends(data.sends);
+            } catch (err) {
+                console.error("Dashboard fetch failed:", err);
+            }
+        }
+
+        function renderTraces(traces) {
+            const feed = document.getElementById('trace-feed');
+            if (!traces || traces.length === 0) {
+                feed.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No activity detected.</div>`;
+                return;
+            }
+            feed.innerHTML = traces.map(t => `
+                <div class="feed-item animate-fade">
+                    <div class="feed-item-header">
+                        <span class="company-name">${t.company || 'Unknown Corp'}</span>
+                        <span class="timestamp">${new Date(t.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted)">
+                        ${t.contact_email} <span class="segment-tag">${t.qualification?.segment || 'QUALIFYING'}</span>
+                    </div>
+                    <div class="trace-summary">
+                        ${t.qualification?.reasoning || 'Building signal brief...'}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderSends(sends) {
+            const feed = document.getElementById('send-feed');
+            if (!sends || sends.length === 0) {
+                feed.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No sends recorded.</div>`;
+                return;
+            }
+            feed.innerHTML = sends.map(s => `
+                <div class="feed-item animate-fade" style="border-left: 2px solid var(--primary)">
+                    <div class="feed-item-header">
+                        <span style="font-weight: 600; color: var(--text-main)">${s.to}</span>
+                        <span class="timestamp">${new Date(s.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--text-muted)">
+                        <b>Subject:</b> ${s.subject}
+                    </div>
+                    <div class="trace-summary" style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; opacity: 0.8; height: 60px; overflow: hidden; mask-image: linear-gradient(to bottom, black 50%, transparent);">
+                        ${s.body}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function triggerTest() {
+            const company = prompt("Enter Company Name:", "Acme Corp");
+            if (!company) return;
+            const email = prompt("Enter Contact Email:", "prospect@acme.com");
+            if (!email) return;
+
+            try {
+                await fetch('/api/trigger-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ company_name: company, contact_email: email })
+                });
+                alert("Pipeline triggered!");
+                fetchStats();
+            } catch (err) {
+                alert("Trigger failed.");
+            }
+        }
+
+        // Initial fetch and poll
+        fetchStats();
+        setInterval(fetchStats, 5000);
+    </script>
+</body>
+</html>
